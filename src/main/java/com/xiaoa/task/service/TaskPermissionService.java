@@ -13,6 +13,10 @@ import java.util.List;
 public class TaskPermissionService {
 
     public void validateCreate(AuthPrincipal principal, CreateTaskRequest request) {
+        if (!"HQ_ADMIN".equals(principal.getRole()) && !"REGION_ADMIN".equals(principal.getRole())
+                && !"OWNER".equals(principal.getRole())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "当前角色不能创建任务");
+        }
         int level = levelOf(principal);
         if (request.getTargetScope() == null || request.getTargetScope() < level) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "任务下发范围超出当前角色权限");
@@ -22,6 +26,12 @@ public class TaskPermissionService {
         }
         if (level == 2 && request.getTargetScope() == 1) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "区域管理员不能创建全域任务");
+        }
+        if (level == 2 && request.getTargetScope() == 2) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "区域管理员只能下发到本区域及以下对象");
+        }
+        if (level == 4) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "员工不能创建任务");
         }
         if (request.getTargetScope() != 1 && (request.getTargetIds() == null || request.getTargetIds().isEmpty())) {
             throw new BusinessException(ErrorCode.INVALID_PARAMETER, "指定范围任务必须传入目标对象");
@@ -51,7 +61,13 @@ public class TaskPermissionService {
         if ("REGION_ADMIN".equals(principal.getRole())) {
             return task.getCreatedLevel() >= 2;
         }
-        return "OWNER".equals(principal.getRole()) && task.getCreatedLevel() <= 2;
+        if ("OWNER".equals(principal.getRole()) && task.getCreatedLevel() <= 2) {
+            if (task.getTargetScope() == null || task.getTargetScope() == 1) {
+                return true;
+            }
+            return task.getTargetIds() != null && task.getTargetIds().contains(String.valueOf(principal.getOrgId()));
+        }
+        return false;
     }
 
     public int levelOf(AuthPrincipal principal) {

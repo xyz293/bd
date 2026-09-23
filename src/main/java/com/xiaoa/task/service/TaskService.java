@@ -84,6 +84,18 @@ public class TaskService {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
         validateDates(request.getStartAt(), request.getEndAt());
+        if (request.getContentPackageId() == null && original.getFormType() == 2) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "指定内容任务必须关联内容包");
+        }
+
+        boolean storeVariant = "OWNER".equals(principal.getRole()) && original.getCreatedLevel() < 3;
+        if (!storeVariant) {
+            taskMapper.updateEditable(taskId, principal.getTenantId(), request.getTitle(),
+                    request.getContentPackageId(), request.getPlatform(), request.getStartAt(), request.getEndAt());
+            saveModifyLog(principal, original, original.getId(), request);
+            return get(taskId);
+        }
+
         Task variant = new Task();
         variant.setTenantId(principal.getTenantId());
         variant.setTitle(request.getTitle());
@@ -101,14 +113,18 @@ public class TaskService {
         variant.setStartAt(request.getStartAt());
         variant.setEndAt(request.getEndAt());
         taskMapper.insert(variant);
+        saveModifyLog(principal, original, variant.getId(), request);
+        preGenerateCurrentRecords(variant, principal.getTenantId());
+        return variant;
+    }
 
+    private void saveModifyLog(AuthPrincipal principal, Task original, Long taskId, UpdateTaskRequest request) {
         TaskModifyLog log = new TaskModifyLog();
         log.setTenantId(principal.getTenantId());
-        log.setTaskId(variant.getId());
+        log.setTaskId(taskId);
         log.setModifiedBy(principal.getUserId());
         log.setChangeDetail(buildChangeDetail(original, request));
         modifyLogMapper.insert(log);
-        return variant;
     }
 
     @Transactional
@@ -141,6 +157,7 @@ public class TaskService {
                 continue;
             }
             LocalDate periodDate = periodDate(task.getFrequency(), today);
+            ensureRecordForUser(task, principal, periodDate);
             TaskRecord record = recordMapper.findOne(principal.getTenantId(), task.getId(), principal.getUserId(), periodDate);
             result.add(new TaskResponse(task, record, periodDate));
         }
@@ -149,10 +166,10 @@ public class TaskService {
 
     public List<TaskModifyLog> modifyLogs(Long taskId) {
         AuthPrincipal principal = AuthContext.required();
-        Task task = get(taskId);
-        if (!"HQ_ADMIN".equals(principal.getRole()) && !principal.getTenantId().equals(task.getTenantId())) {
+        if (!"HQ_ADMIN".equals(principal.getRole()) && !"REGION_ADMIN".equals(principal.getRole())) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
+        get(taskId);
         return modifyLogMapper.findByTask(principal.getTenantId(), taskId);
     }
 
@@ -177,6 +194,35 @@ public class TaskService {
             }
         }
         return false;
+    }
+
+    @Transactional
+    public void ensureCurrentRecordsForStore(Long storeId, LocalDate date) {
+        AuthPrincipal current = AuthContext.required();
+        LocalDate currentDate = date == null ? LocalDate.now() : date;
+        for (Task task : taskMapper.findActive(current.getTenantId(), LocalDateTime.now())) {
+            LocalDate currentPeriod = periodDate(task.getFrequency(), currentDate);
+            for (UserOrgRole role : userOrgRoleMapper.findActiveByTenantId(current.getTenantId())) {
+                if (!storeId.equals(role.getOrgId()) || (!"STAFF".equals(role.getRole()) && !"OWNER".equals(role.getRole()))) {
+                    continue;
+                }
+                AuthPrincipal target = new AuthPrincipal(role.getUserId(), current.getTenantId(), role.getOrgId(),
+                        role.getRole(), role.getDataScope());
+                if (matches(task, target)) {
+                    ensureRecordForUser(task, target, currentPeriod);
+                }
+            }
+        }
+    }
+
+    private void ensureRecordForUser(Task task, AuthPrincipal principal, LocalDate periodDate) {
+        TaskRecord record = new TaskRecord();
+        record.setTenantId(principal.getTenantId());
+        record.setTaskId(task.getId());
+        record.setUserId(principal.getUserId());
+        record.setStoreId(principal.getOrgId());
+        record.setPeriodDate(periodDate);
+        recordMapper.ensure(record);
     }
 
     private void preGenerateCurrentRecords(Task task, Long tenantId) {

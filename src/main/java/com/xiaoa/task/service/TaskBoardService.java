@@ -14,9 +14,11 @@ import java.time.LocalDate;
 public class TaskBoardService {
 
     private final TaskRecordMapper recordMapper;
+    private final TaskService taskService;
 
-    public TaskBoardService(TaskRecordMapper recordMapper) {
+    public TaskBoardService(TaskRecordMapper recordMapper, TaskService taskService) {
         this.recordMapper = recordMapper;
+        this.taskService = taskService;
     }
 
     public TaskBoardResponse storeBoard(Long storeId, LocalDate periodDate) {
@@ -25,6 +27,7 @@ public class TaskBoardService {
                 && !storeId.equals(principal.getOrgId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
+        taskService.ensureCurrentRecordsForStore(storeId, periodDate);
         long expected = recordMapper.countExpected(principal.getTenantId(), storeId, periodDate);
         long finished = recordMapper.countFinished(principal.getTenantId(), storeId, periodDate);
         return new TaskBoardResponse(storeId, periodDate, expected, finished,

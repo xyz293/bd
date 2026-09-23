@@ -38,7 +38,16 @@ CREATE TABLE IF NOT EXISTS publish_record (
     KEY idx_publish_user (tenant_id, user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE publish_record ADD COLUMN IF NOT EXISTS task_id BIGINT NULL;
+SET @task_id_exists = (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'publish_record' AND column_name = 'task_id'
+);
+SET @task_id_alter = IF(@task_id_exists = 0,
+    'ALTER TABLE publish_record ADD COLUMN task_id BIGINT NULL',
+    'SELECT 1');
+PREPARE task_id_stmt FROM @task_id_alter;
+EXECUTE task_id_stmt;
+DEALLOCATE PREPARE task_id_stmt;
 
 CREATE TABLE IF NOT EXISTS `task` (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
