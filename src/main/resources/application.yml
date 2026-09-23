@@ -58,6 +58,24 @@ management:
       show-details: when_authorized
 
 xiaoa:
+  ai:
+    provider:
+      type: ${AI_PROVIDER_TYPE:demo}
+      image-url: ${AI_IMAGE_URL:}
+      video-submit-url: ${AI_VIDEO_SUBMIT_URL:}
+      video-query-url: ${AI_VIDEO_QUERY_URL:}
+      api-key: ${AI_API_KEY:}
+      timeout-ms: ${AI_PROVIDER_TIMEOUT_MS:60000}
+    cost:
+      image: ${AI_IMAGE_COST:1}
+      video: ${AI_VIDEO_COST:5}
+    schedule:
+      video-poll-ms: ${AI_VIDEO_POLL_MS:30000}
+      timeout-sweeper-ms: ${AI_TIMEOUT_SWEEPER_MS:300000}
+  cors:
+    enabled: ${CORS_ENABLED:true}
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173}
+    allow-credentials: ${CORS_ALLOW_CREDENTIALS:true}
   tenant:
     header-name: ${TENANT_HEADER_NAME:X-Tenant-Id}
     header-enabled: ${TENANT_HEADER_ENABLED:true}

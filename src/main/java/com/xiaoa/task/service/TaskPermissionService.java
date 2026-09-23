@@ -28,7 +28,10 @@ public class TaskPermissionService {
             throw new BusinessException(ErrorCode.FORBIDDEN, "区域管理员不能创建全域任务");
         }
         if (level == 2 && request.getTargetScope() == 2) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "区域管理员只能下发到本区域及以下对象");
+            if (request.getTargetIds() == null || request.getTargetIds().size() != 1
+                    || !principal.getOrgId().equals(request.getTargetIds().get(0))) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "区域管理员只能选择本区域");
+            }
         }
         if (level == 4) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "员工不能创建任务");
@@ -59,7 +62,7 @@ public class TaskPermissionService {
             return true;
         }
         if ("REGION_ADMIN".equals(principal.getRole())) {
-            return task.getCreatedLevel() >= 2;
+            return task.getCreatedLevel() >= 2 && canRegionAccess(principal, task);
         }
         if ("OWNER".equals(principal.getRole()) && task.getCreatedLevel() <= 2) {
             if (task.getTargetScope() == null || task.getTargetScope() == 1) {
@@ -68,6 +71,18 @@ public class TaskPermissionService {
             return task.getTargetIds() != null && task.getTargetIds().contains(String.valueOf(principal.getOrgId()));
         }
         return false;
+    }
+
+    private boolean canRegionAccess(AuthPrincipal principal, com.xiaoa.task.model.Task task) {
+        if (task.getTargetScope() == null || task.getTargetScope() == 1) {
+            return true;
+        }
+        if (task.getTargetIds() == null) {
+            return false;
+        }
+        return task.getTargetScope() == 2
+                ? task.getTargetIds().contains(String.valueOf(principal.getOrgId()))
+                : task.getTargetIds().contains(String.valueOf(principal.getOrgId()));
     }
 
     public int levelOf(AuthPrincipal principal) {

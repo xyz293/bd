@@ -6,6 +6,9 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.Param;
+
+import java.util.List;
 
 @Mapper
 public interface UserMapper {
@@ -34,4 +37,16 @@ public interface UserMapper {
     @Update("UPDATE `user` SET status = #{status} WHERE id = #{id} AND deleted = 0")
     int updateStatus(@org.apache.ibatis.annotations.Param("id") Long id,
                      @org.apache.ibatis.annotations.Param("status") Integer status);
+
+    @Select("SELECT DISTINCT u.id, u.phone, u.openid, u.nickname, u.status, u.created_at, u.updated_at "
+            + "FROM `user` u JOIN user_org_role r ON r.user_id = u.id "
+            + "WHERE r.tenant_id = #{tenantId} AND r.status = 1 AND u.deleted = 0 "
+            + "AND (#{orgId} IS NULL OR r.org_id = #{orgId}) ORDER BY u.id LIMIT #{offset}, #{limit}")
+    List<UserAccount> findByTenantOrg(@Param("tenantId") Long tenantId, @Param("orgId") Long orgId,
+                                      @Param("offset") int offset, @Param("limit") int limit);
+
+    @Select("SELECT COUNT(DISTINCT u.id) FROM `user` u JOIN user_org_role r ON r.user_id = u.id "
+            + "WHERE r.tenant_id = #{tenantId} AND r.status = 1 AND u.deleted = 0 "
+            + "AND (#{orgId} IS NULL OR r.org_id = #{orgId})")
+    long countByTenantOrg(@Param("tenantId") Long tenantId, @Param("orgId") Long orgId);
 }

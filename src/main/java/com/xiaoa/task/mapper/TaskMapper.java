@@ -33,6 +33,11 @@ public interface TaskMapper {
             + "ORDER BY created_at DESC")
     List<Task> findActive(@Param("tenantId") Long tenantId, @Param("now") LocalDateTime now);
 
+    @Select("SELECT id, tenant_id, title, form_type, content_package_id, platform, frequency, target_scope, "
+            + "target_ids, judge_type, source_task_id, created_by, created_level, status, start_at, end_at, created_at, updated_at "
+            + "FROM `task` WHERE tenant_id = #{tenantId} ORDER BY created_at DESC")
+    List<Task> findAll(@Param("tenantId") Long tenantId);
+
     @Update("UPDATE `task` SET title = #{title}, content_package_id = #{contentPackageId}, platform = #{platform}, "
             + "start_at = #{startAt}, end_at = #{endAt} WHERE id = #{id} AND tenant_id = #{tenantId} AND deleted = 0")
     int updateEditable(@Param("id") Long id, @Param("tenantId") Long tenantId, @Param("title") String title,

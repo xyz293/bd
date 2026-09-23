@@ -26,6 +26,11 @@ public interface OrgMapper {
             + "FROM `org` WHERE tenant_id = #{tenantId} AND deleted = 0 ORDER BY type, id")
     List<Org> findByTenantId(Long tenantId);
 
+    @Update("UPDATE `org` SET parent_id = #{parentId} WHERE id = #{id} AND tenant_id = #{tenantId} AND deleted = 0")
+    int updateParent(@org.apache.ibatis.annotations.Param("id") Long id,
+                     @org.apache.ibatis.annotations.Param("tenantId") Long tenantId,
+                     @org.apache.ibatis.annotations.Param("parentId") Long parentId);
+
     @Update("UPDATE `org` SET name = #{name} WHERE id = #{id} AND tenant_id = #{tenantId} AND deleted = 0")
     int updateName(@org.apache.ibatis.annotations.Param("id") Long id,
                    @org.apache.ibatis.annotations.Param("tenantId") Long tenantId,

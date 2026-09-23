@@ -172,8 +172,9 @@ public class AccountService {
         if (tenant == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "租户不存在");
         }
-        if (tenant.getStatus() != null && tenant.getStatus() == 2) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "租户已停用");
+        if (tenant.getStatus() != null && (tenant.getStatus() == 2 || tenant.getStatus() == 3)) {
+            throw new BusinessException(tenant.getStatus() == 3 ? ErrorCode.TENANT_EXPIRED : ErrorCode.FORBIDDEN,
+                    tenant.getStatus() == 3 ? "租户已到期，请续费" : "租户已停用");
         }
         if (tenant.getExpireAt() != null && tenant.getExpireAt().isBefore(java.time.LocalDateTime.now())) {
             throw new BusinessException(ErrorCode.TENANT_EXPIRED);

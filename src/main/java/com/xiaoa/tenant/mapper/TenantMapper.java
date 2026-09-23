@@ -28,4 +28,7 @@ public interface TenantMapper {
     @Update("UPDATE `tenant` SET status = #{status} WHERE id = #{id} AND deleted = 0")
     int updateStatus(@org.apache.ibatis.annotations.Param("id") Long id,
                      @org.apache.ibatis.annotations.Param("status") Integer status);
+
+    @Update("UPDATE `tenant` SET status = 3 WHERE status = 1 AND expire_at IS NOT NULL AND expire_at < #{now}")
+    int markExpired(@org.apache.ibatis.annotations.Param("now") LocalDateTime now);
 }

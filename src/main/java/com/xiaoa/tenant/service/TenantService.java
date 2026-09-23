@@ -78,6 +78,16 @@ public class TenantService {
         return tenant;
     }
 
+    @Transactional
+    public void renew(Long tenantId, LocalDateTime expireAt) {
+        if (expireAt == null || !expireAt.isAfter(LocalDateTime.now())) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "续费到期时间必须晚于当前时间");
+        }
+        if (tenantMapper.renew(tenantId, expireAt, 1) != 1) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "租户不存在");
+        }
+    }
+
     public void ensureUsable(Tenant tenant) {
         if (tenant.getStatus() != null && tenant.getStatus() == 2) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "租户已停用");

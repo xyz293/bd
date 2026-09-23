@@ -3,6 +3,10 @@ package com.xiaoa.tenant.controller;
 import com.xiaoa.common.api.Result;
 import com.xiaoa.tenant.dto.OpenTenantRequest;
 import com.xiaoa.tenant.dto.OpenTenantResponse;
+import com.xiaoa.common.auth.AuthPrincipal;
+import com.xiaoa.common.auth.AuthContext;
+import org.springframework.web.bind.annotation.PatchMapping;
+import java.time.LocalDateTime;
 import com.xiaoa.tenant.model.Tenant;
 import com.xiaoa.tenant.service.TenantService;
 import org.springframework.validation.annotation.Validated;
@@ -34,5 +38,15 @@ public class TenantController {
     @GetMapping("/{tenantId}")
     public Result<Tenant> get(@PathVariable Long tenantId) {
         return Result.success(tenantService.get(tenantId));
+    }
+
+    @PatchMapping("/{tenantId}/renew")
+    public Result<Void> renew(@PathVariable Long tenantId, @RequestBody LocalDateTime expireAt) {
+        AuthPrincipal principal = AuthContext.required();
+        if (!"HQ_ADMIN".equals(principal.getRole()) || !principal.getTenantId().equals(tenantId)) {
+            throw new com.xiaoa.common.exception.BusinessException(com.xiaoa.common.exception.ErrorCode.FORBIDDEN);
+        }
+        tenantService.renew(tenantId, expireAt);
+        return Result.success();
     }
 }

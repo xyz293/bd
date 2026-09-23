@@ -36,15 +36,21 @@ public class InviteService {
         if (store == null || store.getType() != 3) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "门店不存在");
         }
-        if (!"HQ_ADMIN".equals(principal.getRole()) && !principal.getOrgId().equals(store.getId())) {
+        if (!"HQ_ADMIN".equals(principal.getRole()) && !principal.getOrgId().equals(store.getId())
+                && !("REGION_ADMIN".equals(principal.getRole()) && isDirectStoreInRegion(principal, store))) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+        String role = request.getRole() == null || request.getRole().trim().isEmpty()
+                ? "STAFF" : request.getRole().trim();
+        if (!"STAFF".equals(role) && !"OWNER".equals(role)) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "邀请码角色只能是 STAFF 或 OWNER");
         }
         String code = generateCode();
         InviteCode inviteCode = new InviteCode();
         inviteCode.setTenantId(principal.getTenantId());
         inviteCode.setStoreId(request.getStoreId());
         inviteCode.setCode(code);
-        inviteCode.setRole("STAFF");
+        inviteCode.setRole(role);
         inviteCode.setExpireAt(request.getExpireAt());
         inviteCode.setCreatedBy(principal.getUserId());
         inviteCodeMapper.insert(inviteCode);
@@ -73,6 +79,11 @@ public class InviteService {
             throw new BusinessException(ErrorCode.INVITE_USED);
         }
         return inviteCode;
+    }
+
+    private boolean isDirectStoreInRegion(AuthPrincipal principal, Org store) {
+        Org parent = orgMapper.findById(store.getParentId(), principal.getTenantId());
+        return parent != null && parent.getId().equals(principal.getOrgId()) && parent.getType() == 2;
     }
 
     private String generateCode() {

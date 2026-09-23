@@ -146,6 +146,11 @@ public class TaskService {
         return task;
     }
 
+    public List<Task> findAll() {
+        AuthPrincipal principal = AuthContext.required();
+        return taskMapper.findAll(principal.getTenantId());
+    }
+
     public List<TaskResponse> myTasks() {
         AuthPrincipal principal = AuthContext.required();
         LocalDate today = LocalDate.now();
@@ -250,13 +255,21 @@ public class TaskService {
             return true;
         }
         List<Long> ids = parseIds(task.getTargetIds());
+        if (task.getTargetScope() == 2) {
+            for (UserOrgRole role : userOrgRoleMapper.findActiveByTenantId(principal.getTenantId())) {
+                if (principal.getUserId().equals(role.getUserId()) && ids.contains(role.getOrgId())) {
+                    return true;
+                }
+            }
+            return false;
+        }
         if (task.getTargetScope() == 3) {
             return ids.contains(principal.getOrgId());
         }
         if (task.getTargetScope() == 4) {
             return ids.contains(principal.getUserId());
         }
-        return principal.getDataScope() != null && principal.getDataScope() <= 2;
+        return false;
     }
 
     private List<Long> parseIds(String json) {
