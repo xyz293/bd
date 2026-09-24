@@ -11,8 +11,7 @@ SET @work_publish_status_exists = (
     WHERE table_schema = DATABASE() AND table_name = 'work' AND column_name = 'publish_status'
 );
 SET @work_publish_status_sql = IF(@work_publish_status_exists = 0,
-    'ALTER TABLE `work` ADD COLUMN publish_status VARCHAR(20) NOT NULL DEFAULT ''NONE'' '
-        || 'COMMENT ''NONE/DRAFT/PENDING_AUDIT/APPROVED/REJECTED/PUBLISHED''',
+    'ALTER TABLE `work` ADD COLUMN publish_status VARCHAR(20) NOT NULL DEFAULT ''NONE'' COMMENT ''NONE/DRAFT/PENDING_AUDIT/APPROVED/REJECTED/PUBLISHED''',
     'SELECT 1');
 PREPARE work_publish_status_stmt FROM @work_publish_status_sql;
 EXECUTE work_publish_status_stmt;

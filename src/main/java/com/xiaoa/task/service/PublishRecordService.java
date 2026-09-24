@@ -1,5 +1,8 @@
 package com.xiaoa.task.service;
 
+import com.xiaoa.ai.model.Work;
+import com.xiaoa.ai.model.WorkPublishStatus;
+import com.xiaoa.ai.service.WorkStateMachine;
 import com.xiaoa.common.auth.AuthContext;
 import com.xiaoa.common.auth.AuthPrincipal;
 import com.xiaoa.common.exception.BusinessException;
@@ -24,13 +27,16 @@ public class PublishRecordService {
     private final TaskRecordMapper taskRecordMapper;
     private final TaskService taskService;
     private final WorkMapper workMapper;
+    private final WorkStateMachine workStateMachine;
 
     public PublishRecordService(PublishRecordMapper publishRecordMapper, TaskRecordMapper taskRecordMapper,
-                                TaskService taskService, WorkMapper workMapper) {
+                                TaskService taskService, WorkMapper workMapper,
+                                WorkStateMachine workStateMachine) {
         this.publishRecordMapper = publishRecordMapper;
         this.taskRecordMapper = taskRecordMapper;
         this.taskService = taskService;
         this.workMapper = workMapper;
+        this.workStateMachine = workStateMachine;
     }
 
     @Transactional
@@ -38,6 +44,16 @@ public class PublishRecordService {
         AuthPrincipal principal = AuthContext.required();
         if (workMapper.countOwned(principal.getTenantId(), request.getWorkId(), principal.getUserId()) == 0) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "只能上报自己的作品");
+        }
+        Work work = workMapper.findById(request.getWorkId(), principal.getTenantId());
+        if (work == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "作品不存在");
+        }
+        String publishStatus = work.getPublishStatus() == null ? WorkPublishStatus.NONE : work.getPublishStatus();
+        if (!WorkPublishStatus.DRAFT.equals(publishStatus)
+                && !WorkPublishStatus.APPROVED.equals(publishStatus)
+                && !WorkPublishStatus.PUBLISHED.equals(publishStatus)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "作品未通过审核，不可发布");
         }
         Task task = request.getTaskId() == null ? null : taskService.get(request.getTaskId());
         if (task != null) {
@@ -67,6 +83,11 @@ public class PublishRecordService {
             taskRecordMapper.ensure(taskRecord);
             taskRecordMapper.complete(principal.getTenantId(), task.getId(), principal.getUserId(),
                     periodDate, record.getId(), LocalDateTime.now());
+        }
+        // 发布维度状态机流转：DRAFT/APPROVED -> PUBLISHED；已 PUBLISHED 的重复发布不再流转。
+        if (!WorkPublishStatus.PUBLISHED.equals(publishStatus)) {
+            workStateMachine.transit(principal.getTenantId(), request.getWorkId(),
+                    publishStatus, WorkPublishStatus.PUBLISHED);
         }
         return record;
     }

@@ -1,7 +1,6 @@
 package com.xiaoa.admin.mapper;
 
 import com.xiaoa.admin.model.AssetAdminItem;
-import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
