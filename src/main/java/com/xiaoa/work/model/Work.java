@@ -1,7 +1,11 @@
-package com.xiaoa.ai.model;
+package com.xiaoa.work.model;
 
 import java.time.LocalDateTime;
 
+/**
+ * 作品实体（原 com.xiaoa.ai.model.Work，随创作域归拢到 work 模块）。
+ * 新增发布维度：publishStatus / caption / sourceAssetIds。
+ */
 public class Work {
 
     private Long id;
@@ -18,14 +22,20 @@ public class Work {
     private Integer promptTemplateVersion;
     private String contentUrl;
     private String copywriting;
+    /** 生成维度状态：PENDING/SUCCESS/FAILED */
     private String status;
     private String failReason;
+    /** 发布维度状态：NONE/DRAFT/PENDING_AUDIT/APPROVED/REJECTED/PUBLISHED */
     private String publishStatus;
+    /** 配套文案（图文成套，生成成功后异步补齐，可手动修改） */
     private String caption;
+    /** 引用素材快照，JSON 数组字符串 */
     private String sourceAssetIds;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
-    /** 非表字段：最新审核意见，由服务层填充。 */
+    /** 最近一次审核结论（非表字段，详情接口组装） */
+    private String auditStatus;
+    /** 最近一次审核意见（非表字段，详情接口组装） */
     private String auditOpinion;
 
     public Long getId() { return id; }
@@ -66,10 +76,12 @@ public class Work {
     public void setCaption(String caption) { this.caption = caption; }
     public String getSourceAssetIds() { return sourceAssetIds; }
     public void setSourceAssetIds(String sourceAssetIds) { this.sourceAssetIds = sourceAssetIds; }
-    public String getAuditOpinion() { return auditOpinion; }
-    public void setAuditOpinion(String auditOpinion) { this.auditOpinion = auditOpinion; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public String getAuditStatus() { return auditStatus; }
+    public void setAuditStatus(String auditStatus) { this.auditStatus = auditStatus; }
+    public String getAuditOpinion() { return auditOpinion; }
+    public void setAuditOpinion(String auditOpinion) { this.auditOpinion = auditOpinion; }
 }

@@ -38,6 +38,7 @@ public class AuthContextFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } finally {
             AuthContext.clear();
+            TenantContext.clear();
         }
     }
 

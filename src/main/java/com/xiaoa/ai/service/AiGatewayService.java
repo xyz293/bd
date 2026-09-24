@@ -1,5 +1,8 @@
 package com.xiaoa.ai.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xiaoa.admin.mapper.AssetAdminMapper;
 import com.xiaoa.ai.dto.GenerateRequest;
 import com.xiaoa.ai.mapper.MediaTaskMapper;
 import com.xiaoa.task.mapper.WorkMapper;
@@ -33,6 +36,8 @@ public class AiGatewayService {
     private final ObjectStorageService objectStorageService;
     private final AiTaskSettlementService settlementService;
     private final QuotaService quotaService;
+    private final AssetAdminMapper assetAdminMapper;
+    private final ObjectMapper objectMapper;
     private final Executor aiTaskExecutor;
     private final long imageCost;
     private final long videoCost;
@@ -41,6 +46,7 @@ public class AiGatewayService {
                             PromptService promptService, AiProvider aiProvider,
                             ObjectStorageService objectStorageService,
                             AiTaskSettlementService settlementService, QuotaService quotaService,
+                            AssetAdminMapper assetAdminMapper, ObjectMapper objectMapper,
                             @Value("${xiaoa.ai.cost.image:1}") long imageCost,
                             @Value("${xiaoa.ai.cost.video:5}") long videoCost,
                             @Qualifier("aiTaskExecutor") Executor aiTaskExecutor) {
@@ -51,6 +57,8 @@ public class AiGatewayService {
         this.objectStorageService = objectStorageService;
         this.settlementService = settlementService;
         this.quotaService = quotaService;
+        this.assetAdminMapper = assetAdminMapper;
+        this.objectMapper = objectMapper;
         this.imageCost = imageCost;
         this.videoCost = videoCost;
         this.aiTaskExecutor = aiTaskExecutor;
@@ -77,6 +85,7 @@ public class AiGatewayService {
         work.setPromptTemplateId(prompt.getTemplate().getId());
         work.setPromptTemplateVersion(prompt.getTemplate().getVersion());
         work.setStatus("PENDING");
+        work.setSourceAssetIds(snapshotAssets(principal.getTenantId(), request.getAssetIds()));
         workMapper.insert(work);
 
         quotaService.consumeForAi(principal.getTenantId(), principal.getOrgId(), cost, work.getId());
@@ -120,7 +129,10 @@ public class AiGatewayService {
         }
     }
 
-    private void dispatchAfterCommit(Long taskId) {
+    /**
+     * 事务提交后派发生成任务；供改稿等复用同一异步通道。
+     */
+    public void dispatchAfterCommit(Long taskId) {
         if (!org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
             dispatch(taskId);
             return;
@@ -258,6 +270,31 @@ public class AiGatewayService {
 
     private String message(Throwable exception) {
         return exception.getMessage() == null ? "AI模型调用失败" : exception.getMessage();
+    }
+
+    /**
+     * 素材可见性校验：assetIds 必须在当前租户可见范围（平台挂载包 owner_type=2 / 本租户自有素材），
+     * 校验通过后把素材 ID 列表快照进 work.source_asset_ids。
+     */
+    private String snapshotAssets(Long tenantId, java.util.List<Long> assetIds) {
+        if (assetIds == null || assetIds.isEmpty()) {
+            return null;
+        }
+        java.util.LinkedHashSet<Long> distinct = new java.util.LinkedHashSet<>(assetIds);
+        distinct.remove(null);
+        if (distinct.isEmpty()) {
+            return null;
+        }
+        for (Long assetId : distinct) {
+            if (assetAdminMapper.findVisibleById(tenantId, assetId) == null) {
+                throw new BusinessException(ErrorCode.INVALID_PARAMETER, "引用素材不存在或不在可见范围：" + assetId);
+            }
+        }
+        try {
+            return objectMapper.writeValueAsString(distinct);
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "素材快照序列化失败");
+        }
     }
 
     private boolean isAdmin(AuthPrincipal principal) {

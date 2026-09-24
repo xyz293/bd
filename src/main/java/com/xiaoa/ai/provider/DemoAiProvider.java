@@ -31,4 +31,16 @@ public class DemoAiProvider implements AiProvider {
     public AiResult queryVideoTask(String externalTaskId) {
         return AiResult.success("demo://video/" + externalTaskId);
     }
+
+    @Override
+    public String generateCaption(AiRequest request) {
+        String context = request.getPrompt() == null ? "" : request.getPrompt().trim();
+        if (context.isEmpty()) {
+            return null;
+        }
+        String style = request.getStyleName() == null ? "" : request.getStyleName().trim();
+        String head = style.isEmpty() ? "新品上新" : style + "上新";
+        String body = context.length() > 60 ? context.substring(0, 60) : context;
+        return head + "｜" + body + "，快来门店打卡体验～";
+    }
 }

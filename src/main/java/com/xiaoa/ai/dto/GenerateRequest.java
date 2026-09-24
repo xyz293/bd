@@ -21,6 +21,8 @@ public class GenerateRequest {
     private String userInput;
     @Size(max = 10)
     private List<String> refImageUrls = new ArrayList<>();
+    @Size(max = 20)
+    private List<Long> assetIds = new ArrayList<>();
 
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
@@ -34,4 +36,6 @@ public class GenerateRequest {
     public void setUserInput(String userInput) { this.userInput = userInput; }
     public List<String> getRefImageUrls() { return refImageUrls; }
     public void setRefImageUrls(List<String> refImageUrls) { this.refImageUrls = refImageUrls == null ? new ArrayList<>() : refImageUrls; }
+    public List<Long> getAssetIds() { return assetIds; }
+    public void setAssetIds(List<Long> assetIds) { this.assetIds = assetIds == null ? new ArrayList<>() : assetIds; }
 }
