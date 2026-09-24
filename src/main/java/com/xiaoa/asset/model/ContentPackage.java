@@ -1,9 +1,18 @@
-package com.xiaoa.admin.model;
+package com.xiaoa.asset.model;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
+/**
+ * 内容包：营销日配置任务模板，到点由定时任务下发为任务。
+ * status：1 ACTIVE(待下发) / 2 DISPATCHED(已下发，即方案中的 EXPIRED) / 3 CANCELED(已撤销)。
+ * 下发策略：先条件更新抢占状态、再建任务——宁可漏发（可补）、不可重发（难删）。
+ */
 public class ContentPackage {
+
+    public static final int STATUS_ACTIVE = 1;
+    public static final int STATUS_DISPATCHED = 2;
+    public static final int STATUS_CANCELED = 3;
 
     private Long id;
     private Long tenantId;
@@ -11,8 +20,11 @@ public class ContentPackage {
     private LocalDate calendarDate;
     private LocalDateTime publishAt;
     private String copyDirection;
+    /** 任务模板 JSON 字符串 */
     private String taskTemplate;
     private Integer status;
+    private Long sourceTaskId;
+    private String lastError;
     private Long createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -33,6 +45,10 @@ public class ContentPackage {
     public void setTaskTemplate(String taskTemplate) { this.taskTemplate = taskTemplate; }
     public Integer getStatus() { return status; }
     public void setStatus(Integer status) { this.status = status; }
+    public Long getSourceTaskId() { return sourceTaskId; }
+    public void setSourceTaskId(Long sourceTaskId) { this.sourceTaskId = sourceTaskId; }
+    public String getLastError() { return lastError; }
+    public void setLastError(String lastError) { this.lastError = lastError; }
     public Long getCreatedBy() { return createdBy; }
     public void setCreatedBy(Long createdBy) { this.createdBy = createdBy; }
     public LocalDateTime getCreatedAt() { return createdAt; }

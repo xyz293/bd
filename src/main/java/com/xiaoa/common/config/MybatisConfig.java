@@ -7,6 +7,6 @@ import org.apache.ibatis.session.SqlSessionFactory;
 
 @Configuration
 @ConditionalOnBean(SqlSessionFactory.class)
-@MapperScan({"com.xiaoa.tenant.mapper", "com.xiaoa.task.mapper", "com.xiaoa.admin.mapper", "com.xiaoa.quota.mapper", "com.xiaoa.ai.mapper"})
+@MapperScan({"com.xiaoa.tenant.mapper", "com.xiaoa.task.mapper", "com.xiaoa.admin.mapper", "com.xiaoa.quota.mapper", "com.xiaoa.ai.mapper", "com.xiaoa.asset.mapper"})
 public class MybatisConfig {
 }

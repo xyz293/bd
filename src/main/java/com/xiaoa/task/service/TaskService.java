@@ -76,6 +76,34 @@ public class TaskService {
         return task;
     }
 
+    /**
+     * 系统建任务（内容包定时下发等无登录态场景）：跳过角色校验，按总部层级落库，
+     * created_by=0 表示系统；模板合法性由调用方校验。
+     */
+    @Transactional
+    public Task createBySystem(Long tenantId, String title, Integer formType, Long contentPackageId,
+                               String platform, Integer frequency, Integer targetScope, List<Long> targetIds,
+                               Integer judgeType, LocalDateTime endAt) {
+        Task task = new Task();
+        task.setTenantId(tenantId);
+        task.setTitle(title);
+        task.setFormType(formType == null ? 1 : formType);
+        task.setContentPackageId(contentPackageId);
+        task.setPlatform(platform);
+        task.setFrequency(frequency);
+        task.setTargetScope(targetScope == null ? 1 : targetScope);
+        task.setTargetIds(toJson(targetIds == null ? new ArrayList<Long>() : targetIds));
+        task.setJudgeType(judgeType == null ? 1 : judgeType);
+        task.setCreatedBy(0L);
+        task.setCreatedLevel(1);
+        task.setStatus(1);
+        task.setStartAt(LocalDateTime.now());
+        task.setEndAt(endAt);
+        taskMapper.insert(task);
+        preGenerateCurrentRecords(task, tenantId);
+        return task;
+    }
+
     @Transactional
     public Task update(Long taskId, UpdateTaskRequest request) {
         AuthPrincipal principal = AuthContext.required();

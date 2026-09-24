@@ -7,6 +7,10 @@ spring:
     name: xiaoa-backend
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  servlet:
+    multipart:
+      max-file-size: ${MULTIPART_MAX_FILE_SIZE:110MB}
+      max-request-size: ${MULTIPART_MAX_REQUEST_SIZE:120MB}
   datasource:
     url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/xiaoa?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true}
     username: ${MYSQL_USERNAME:xiaoa}
@@ -58,6 +62,8 @@ management:
       show-details: when_authorized
 
 xiaoa:
+  storage:
+    local-dir: ${STORAGE_LOCAL_DIR:./data/storage}
   ai:
     provider:
       type: ${AI_PROVIDER_TYPE:demo}

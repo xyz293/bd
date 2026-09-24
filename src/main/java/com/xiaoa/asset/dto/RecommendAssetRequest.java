@@ -1,4 +1,4 @@
-package com.xiaoa.admin.dto;
+package com.xiaoa.asset.dto;
 
 import javax.validation.constraints.NotNull;
 
