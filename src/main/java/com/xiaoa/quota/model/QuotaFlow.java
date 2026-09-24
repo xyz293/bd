@@ -9,6 +9,7 @@ public class QuotaFlow {
     private Long accountId;
     private String bizType;
     private String bizId;
+    private String idempotentKey;
     private Long amount;
     private Long balanceAfter;
     private String remark;
@@ -24,6 +25,8 @@ public class QuotaFlow {
     public void setBizType(String bizType) { this.bizType = bizType; }
     public String getBizId() { return bizId; }
     public void setBizId(String bizId) { this.bizId = bizId; }
+    public String getIdempotentKey() { return idempotentKey; }
+    public void setIdempotentKey(String idempotentKey) { this.idempotentKey = idempotentKey; }
     public Long getAmount() { return amount; }
     public void setAmount(Long amount) { this.amount = amount; }
     public Long getBalanceAfter() { return balanceAfter; }
