@@ -1,9 +1,8 @@
 package com.xiaoa.ai.service;
 
-import com.xiaoa.admin.mapper.ComplianceWordMapper;
 import com.xiaoa.ai.mapper.StyleAiMapper;
-import com.xiaoa.admin.model.ComplianceWord;
 import com.xiaoa.admin.model.StyleOption;
+import com.xiaoa.admin.service.ComplianceService;
 import com.xiaoa.ai.mapper.PromptTemplateMapper;
 import com.xiaoa.ai.model.PromptTemplate;
 import com.xiaoa.common.exception.BusinessException;
@@ -11,7 +10,6 @@ import com.xiaoa.common.exception.ErrorCode;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 @Service
@@ -19,13 +17,13 @@ public class PromptService {
 
     private final PromptTemplateMapper templateMapper;
     private final StyleAiMapper styleMapper;
-    private final ComplianceWordMapper complianceWordMapper;
+    private final ComplianceService complianceService;
 
     public PromptService(PromptTemplateMapper templateMapper, StyleAiMapper styleMapper,
-                         ComplianceWordMapper complianceWordMapper) {
+                         ComplianceService complianceService) {
         this.templateMapper = templateMapper;
         this.styleMapper = styleMapper;
-        this.complianceWordMapper = complianceWordMapper;
+        this.complianceService = complianceService;
     }
 
     public PromptBuildResult build(Long tenantId, String scene, String platform, Long styleId,
@@ -48,23 +46,8 @@ public class PromptService {
         for (Map.Entry<String, String> entry : variables.entrySet()) {
             prompt = prompt.replace("{{" + entry.getKey() + "}}", entry.getValue());
         }
-        prompt = checkCompliance(tenantId, prompt);
+        prompt = complianceService.filterText(tenantId, prompt);
         return new PromptBuildResult(template, style, prompt);
-    }
-
-    private String checkCompliance(Long tenantId, String prompt) {
-        List<ComplianceWord> words = complianceWordMapper.findActive(tenantId);
-        String checked = prompt;
-        for (ComplianceWord word : words) {
-            if (word.getWord() == null || !checked.contains(word.getWord())) {
-                continue;
-            }
-            if (word.getLevel() != null && word.getLevel() == 2) {
-                throw new BusinessException(ErrorCode.COMPLIANCE_REJECTED, "提示词包含违规内容");
-            }
-            checked = checked.replace(word.getWord(), word.getReplacement() == null ? "" : word.getReplacement());
-        }
-        return checked;
     }
 
     private String safe(String value) {

@@ -55,12 +55,12 @@ public interface AssetMapper {
                           @Param("assetId") Long assetId);
 
     @Update("UPDATE asset SET name = COALESCE(#{name}, name), category = COALESCE(#{category}, category) "
-            + "WHERE id = #{id} AND tenant_id = #{tenantId} AND scope &lt;&gt; 'PLATFORM'")
+            + "WHERE id = #{id} AND tenant_id = #{tenantId} AND scope <> 'PLATFORM'")
     int updateNameCategory(@Param("tenantId") Long tenantId, @Param("id") Long id,
                            @Param("name") String name, @Param("category") String category);
 
     @Update("UPDATE asset SET status = #{status} "
-            + "WHERE id = #{id} AND tenant_id = #{tenantId} AND scope &lt;&gt; 'PLATFORM'")
+            + "WHERE id = #{id} AND tenant_id = #{tenantId} AND scope <> 'PLATFORM'")
     int updateStatus(@Param("tenantId") Long tenantId, @Param("id") Long id, @Param("status") String status);
 
     /**
@@ -72,11 +72,12 @@ public interface AssetMapper {
     int promote(@Param("tenantId") Long tenantId, @Param("id") Long id, @Param("category") String category);
 
     /**
-     * 推优提交：仅本店素材可推优，已在推优流程中的拒绝；条件更新防重复提交。
+     * 推优提交：仅本店且当前可见（APPROVED）的素材可推优；
+     * PENDING_REVIEW 重复推优不命中（报已在推优流程中）；条件更新防重复提交。
      */
     @Update("UPDATE asset SET status = 'PENDING_REVIEW' "
             + "WHERE id = #{id} AND tenant_id = #{tenantId} AND scope = 'STORE' "
-            + "AND status NOT IN ('PENDING_REVIEW', 'APPROVED')")
+            + "AND status = 'APPROVED'")
     int markPendingReview(@Param("tenantId") Long tenantId, @Param("id") Long id);
 
     @Select("<script>SELECT " + COLUMNS + " FROM asset "

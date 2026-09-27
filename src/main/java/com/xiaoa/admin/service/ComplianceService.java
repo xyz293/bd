@@ -33,6 +33,28 @@ public class ComplianceService {
         return wordMapper.findActive(permissionService.requiredRead().getTenantId());
     }
 
+    /**
+     * 文本合规过滤（供对话出稿、提示词组装等复用）：
+     * level1 违规词替换为 replacement，level2 拦截抛 COMPLIANCE_REJECTED。
+     */
+    public String filterText(Long tenantId, String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        List<ComplianceWord> words = wordMapper.findActive(tenantId);
+        String checked = text;
+        for (ComplianceWord word : words) {
+            if (word.getWord() == null || !checked.contains(word.getWord())) {
+                continue;
+            }
+            if (word.getLevel() != null && word.getLevel() == 2) {
+                throw new BusinessException(ErrorCode.COMPLIANCE_REJECTED, "内容包含违规表述，请调整后重试");
+            }
+            checked = checked.replace(word.getWord(), word.getReplacement() == null ? "" : word.getReplacement());
+        }
+        return checked;
+    }
+
     @Transactional
     public ComplianceWord saveWord(UpsertComplianceWordRequest request) {
         AuthPrincipal principal = permissionService.requiredWrite();

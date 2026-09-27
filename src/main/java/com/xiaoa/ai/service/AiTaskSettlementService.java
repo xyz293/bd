@@ -50,7 +50,8 @@ public class AiTaskSettlementService {
             return;
         }
         workMapper.markFailed(task.getTenantId(), task.getWorkId(), safeReason);
-        quotaService.refundForAi(task.getTenantId(), task.getStoreId(), task.getCost(), task.getId());
+        quotaService.refundForAi(task.getTenantId(), task.getStoreId(), task.getCost(),
+                task.getWorkId(), task.getId());
         mediaTaskMapper.markRefunded(task.getId());
     }
 

@@ -11,6 +11,10 @@ public class UserAccount {
     private Integer status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    /** 非表字段：成员额度余额（STAFF→员工账户，OWNER→门店账户，管理层→租户池），由服务层填充。 */
+    private Long quotaBalance;
+    /** 非表字段：STAFF 成员关系 ID（user_org_role.id），店长划拨/回收的 memberRoleId 取自这里。 */
+    private Long userOrgRoleId;
 
     public Long getId() {
         return id;
@@ -66,5 +70,21 @@ public class UserAccount {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public Long getQuotaBalance() {
+        return quotaBalance;
+    }
+
+    public void setQuotaBalance(Long quotaBalance) {
+        this.quotaBalance = quotaBalance;
+    }
+
+    public Long getUserOrgRoleId() {
+        return userOrgRoleId;
+    }
+
+    public void setUserOrgRoleId(Long userOrgRoleId) {
+        this.userOrgRoleId = userOrgRoleId;
     }
 }

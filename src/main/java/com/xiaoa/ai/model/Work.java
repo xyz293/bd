@@ -23,6 +23,8 @@ public class Work {
     private String publishStatus;
     private String caption;
     private String sourceAssetIds;
+    /** 关联对话会话：去配图溯源；有值时 CaptionService 跳过自动文案（用对话产出文案） */
+    private Long chatSessionId;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     /** 非表字段：最新审核意见，由服务层填充。 */
@@ -66,6 +68,8 @@ public class Work {
     public void setCaption(String caption) { this.caption = caption; }
     public String getSourceAssetIds() { return sourceAssetIds; }
     public void setSourceAssetIds(String sourceAssetIds) { this.sourceAssetIds = sourceAssetIds; }
+    public Long getChatSessionId() { return chatSessionId; }
+    public void setChatSessionId(Long chatSessionId) { this.chatSessionId = chatSessionId; }
     public String getAuditOpinion() { return auditOpinion; }
     public void setAuditOpinion(String auditOpinion) { this.auditOpinion = auditOpinion; }
     public LocalDateTime getCreatedAt() { return createdAt; }

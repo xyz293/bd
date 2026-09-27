@@ -6,14 +6,18 @@ import com.xiaoa.common.auth.AuthPrincipal;
 import com.xiaoa.common.exception.BusinessException;
 import com.xiaoa.common.exception.ErrorCode;
 import com.xiaoa.quota.dto.AllocateQuotaRequest;
+import com.xiaoa.quota.dto.AllocateStaffQuotaRequest;
 import com.xiaoa.quota.dto.CreditQuotaRequest;
 import com.xiaoa.quota.dto.QuotaFlowQuery;
+import com.xiaoa.quota.dto.RecallStaffQuotaRequest;
 import com.xiaoa.quota.mapper.QuotaAccountMapper;
 import com.xiaoa.quota.mapper.QuotaFlowMapper;
 import com.xiaoa.quota.model.QuotaAccount;
 import com.xiaoa.quota.model.QuotaBizType;
 import com.xiaoa.quota.model.QuotaFlow;
 import com.xiaoa.quota.model.QuotaSummary;
+import com.xiaoa.tenant.mapper.UserOrgRoleMapper;
+import com.xiaoa.tenant.model.UserOrgRole;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +25,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * 三级额度账户：TENANT 租户池 → STORE 门店账户 → STAFF 员工账户。
+ * STAFF 级 owner_id = user_org_role.id（成员关系 ID，一人多店各有账户）。
+ * 所有账务变更单入口 apply()：幂等流水 + 乐观锁 + 余额预检。
+ */
 @Service
 public class QuotaService {
 
@@ -30,12 +39,14 @@ public class QuotaService {
     private final QuotaAccountMapper accountMapper;
     private final QuotaFlowMapper flowMapper;
     private final AdminPermissionService permissionService;
+    private final UserOrgRoleMapper userOrgRoleMapper;
 
     public QuotaService(QuotaAccountMapper accountMapper, QuotaFlowMapper flowMapper,
-                        AdminPermissionService permissionService) {
+                        AdminPermissionService permissionService, UserOrgRoleMapper userOrgRoleMapper) {
         this.accountMapper = accountMapper;
         this.flowMapper = flowMapper;
         this.permissionService = permissionService;
+        this.userOrgRoleMapper = userOrgRoleMapper;
     }
 
     @Transactional
@@ -90,6 +101,114 @@ public class QuotaService {
         return account;
     }
 
+    /**
+     * 员工账户懒建（幂等）：入店流程主动调用，划拨时兜底。
+     */
+    @Transactional
+    public QuotaAccount ensureStaffAccount(Long tenantId, Long memberRoleId) {
+        if (tenantId == null || memberRoleId == null) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "成员信息不能为空");
+        }
+        QuotaAccount account = accountMapper.findByOwner(tenantId, "STAFF", memberRoleId);
+        if (account != null) {
+            return account;
+        }
+        QuotaAccount created = new QuotaAccount();
+        created.setTenantId(tenantId);
+        created.setLevel("STAFF");
+        created.setOwnerId(memberRoleId);
+        created.setBalance(0L);
+        created.setVersion(0);
+        accountMapper.ensure(created);
+        account = accountMapper.findByOwner(tenantId, "STAFF", memberRoleId);
+        if (account == null) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "员工额度账户创建失败");
+        }
+        return account;
+    }
+
+    /**
+     * 店长向员工划拨：一条事务双流水（门店 ALLOCATE_OUT / 员工 ALLOCATE_IN），
+     * 门店池余额不足时整体失败（乐观锁 WHERE balance>= 兜底）。
+     */
+    @Transactional
+    public void allocateToStaff(AuthPrincipal principal, AllocateStaffQuotaRequest request) {
+        if (principal == null || !"OWNER".equals(principal.getRole()) || principal.getOrgId() == null) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "仅店长可划拨员工额度");
+        }
+        UserOrgRole memberRole = requireStaffRole(principal, request.getMemberRoleId());
+        Long tenantId = principal.getTenantId();
+        QuotaAccount store = ensureStoreAccount(tenantId, principal.getOrgId());
+        QuotaAccount staff = ensureStaffAccount(tenantId, memberRole.getId());
+        String baseKey = requiredKey(request.getBizId(), "alloc");
+        apply(tenantId, store, -request.getAmount(), QuotaBizType.ALLOCATE_OUT,
+                baseKey + ":out", baseKey + ":out", request.getRemark());
+        apply(tenantId, staff, request.getAmount(), QuotaBizType.ALLOCATE_IN,
+                baseKey + ":in", baseKey + ":in", request.getRemark());
+    }
+
+    /**
+     * 店长回收员工未用额度：RECALL 双流水，回收金额超过员工余额即失败。
+     */
+    @Transactional
+    public void recallFromStaff(AuthPrincipal principal, RecallStaffQuotaRequest request) {
+        if (principal == null || !"OWNER".equals(principal.getRole()) || principal.getOrgId() == null) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "仅店长可回收员工额度");
+        }
+        UserOrgRole memberRole = requireStaffRole(principal, request.getMemberRoleId());
+        Long tenantId = principal.getTenantId();
+        QuotaAccount staff = ensureStaffAccount(tenantId, memberRole.getId());
+        QuotaAccount store = ensureStoreAccount(tenantId, principal.getOrgId());
+        String baseKey = requiredKey(request.getBizId(), "recall");
+        apply(tenantId, staff, -request.getAmount(), QuotaBizType.RECALL,
+                baseKey + ":out", baseKey + ":out", request.getRemark());
+        apply(tenantId, store, request.getAmount(), QuotaBizType.RECALL,
+                baseKey + ":in", baseKey + ":in", request.getRemark());
+    }
+
+    private UserOrgRole requireStaffRole(AuthPrincipal principal, Long memberRoleId) {
+        if (memberRoleId == null) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "成员不能为空");
+        }
+        UserOrgRole role = userOrgRoleMapper.findById(memberRoleId, principal.getTenantId());
+        if (role == null || role.getOrgId() == null || !role.getOrgId().equals(principal.getOrgId())
+                || !"STAFF".equals(role.getRole()) || role.getStatus() == null || role.getStatus() != 1) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "员工不存在或不属于本店");
+        }
+        return role;
+    }
+
+    /**
+     * 解析扣费账户：员工（STAFF）优先扣自己的员工账户，无账户（老数据/灰度期）回退门店账户；
+     * 店长及其他角色扣门店账户。
+     */
+    public Long resolveChargeAccountId(Long tenantId, Long storeId, Long userId, String role) {
+        if ("STAFF".equals(role) && userId != null && storeId != null) {
+            UserOrgRole roleRec = userOrgRoleMapper.findByUserOrgRole(tenantId, userId, storeId, "STAFF");
+            if (roleRec != null) {
+                QuotaAccount staff = accountMapper.findByOwner(tenantId, "STAFF", roleRec.getId());
+                if (staff != null) {
+                    return staff.getId();
+                }
+            }
+        }
+        return ensureStoreAccount(tenantId, storeId).getId();
+    }
+
+    /**
+     * 按账户 ID 扣费（对话/AI 生成统一入口），幂等键防重。
+     */
+    public void chargeAccount(Long tenantId, Long accountId, Long amount, String idempotentKey, String remark) {
+        if (amount == null || amount <= 0) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "扣减额度必须大于0");
+        }
+        QuotaAccount account = accountMapper.findById(tenantId, accountId);
+        if (account == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "额度账户不存在");
+        }
+        charge(tenantId, account, amount, idempotentKey, remark);
+    }
+
     @Transactional
     public QuotaAccount credit(CreditQuotaRequest request) {
         permissionService.requireHeadquarters();
@@ -129,17 +248,35 @@ public class QuotaService {
         charge(tenantId, ensureStoreAccount(tenantId, storeId), amount, idempotentKey, remark);
     }
 
+    /**
+     * AI 生成扣费：员工扣员工账户，无员工账户回退门店（灰度平滑）。
+     */
     @Transactional
-    public void consumeForAi(Long tenantId, Long storeId, Long amount, Long workId) {
-        charge(tenantId, storeId, amount, "gen:" + workId, "AI生成扣费");
+    public void consumeForAi(Long tenantId, Long storeId, Long userId, String role, Long amount, Long workId) {
+        Long accountId = resolveChargeAccountId(tenantId, storeId, userId, role);
+        chargeAccount(tenantId, accountId, amount, "gen:" + workId, "AI生成扣费");
     }
 
+    /**
+     * AI 生成失败退款：按扣费流水（CONSUME / bizId=gen:{workId}）的账户退，
+     * 流水缺失时回退门店账户。幂等键保持 refund:{taskId}。
+     */
     @Transactional
-    public void refundForAi(Long tenantId, Long storeId, Long amount, Long taskId) {
+    public void refundForAi(Long tenantId, Long storeId, Long amount, Long workId, Long taskId) {
         if (amount == null || amount <= 0) {
             return;
         }
-        QuotaAccount account = ensureStoreAccount(tenantId, storeId);
+        Long accountId = null;
+        QuotaFlow consume = flowMapper.findByBizTypeAndBizId(tenantId, QuotaBizType.CONSUME.name(), "gen:" + workId);
+        if (consume != null) {
+            accountId = consume.getAccountId();
+        }
+        QuotaAccount account = accountId != null
+                ? accountMapper.findById(tenantId, accountId)
+                : ensureStoreAccount(tenantId, storeId);
+        if (account == null) {
+            account = ensureStoreAccount(tenantId, storeId);
+        }
         apply(tenantId, account, amount, QuotaBizType.REFUND, "refund:" + taskId,
                 "refund:" + taskId, "AI生成失败退款");
     }
@@ -178,13 +315,21 @@ public class QuotaService {
         return page.getList();
     }
 
+    /**
+     * 我的额度：员工优先自己的 STAFF 账户（无则回退门店），店长看门店，管理层看租户池。
+     */
     public QuotaSummary my() {
         AuthPrincipal principal = permissionService.required();
         if (principal.getTenantId() == null) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "平台账号没有租户额度");
         }
         QuotaAccount account;
-        if ("OWNER".equals(principal.getRole()) || "STAFF".equals(principal.getRole())) {
+        if ("STAFF".equals(principal.getRole()) && principal.getOrgId() != null) {
+            account = findStaffAccountOrNull(principal.getTenantId(), principal.getUserId(), principal.getOrgId());
+            if (account == null) {
+                account = ensureStoreAccount(principal.getTenantId(), principal.getOrgId());
+            }
+        } else if ("OWNER".equals(principal.getRole())) {
             account = ensureStoreAccount(principal.getTenantId(), principal.getOrgId());
         } else {
             account = ensureTenantPoolAccount(principal.getTenantId());
@@ -192,6 +337,14 @@ public class QuotaService {
         List<QuotaFlow> recent = flowMapper.findByAccount(principal.getTenantId(), account.getId(), null,
                 null, null, 0, 10);
         return new QuotaSummary(account, recent == null ? Collections.emptyList() : recent);
+    }
+
+    private QuotaAccount findStaffAccountOrNull(Long tenantId, Long userId, Long storeId) {
+        UserOrgRole roleRec = userOrgRoleMapper.findByUserOrgRole(tenantId, userId, storeId, "STAFF");
+        if (roleRec == null) {
+            return null;
+        }
+        return accountMapper.findByOwner(tenantId, "STAFF", roleRec.getId());
     }
 
     private QuotaAccount credit(Long tenantId, QuotaAccount account, Long amount, String idempotentKey,

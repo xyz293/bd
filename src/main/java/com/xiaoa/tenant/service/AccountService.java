@@ -4,6 +4,7 @@ import com.xiaoa.common.auth.AuthPrincipal;
 import com.xiaoa.common.auth.SessionService;
 import com.xiaoa.common.exception.BusinessException;
 import com.xiaoa.common.exception.ErrorCode;
+import com.xiaoa.quota.service.QuotaService;
 import com.xiaoa.tenant.dto.JoinStoreRequest;
 import com.xiaoa.tenant.dto.JoinStoreResponse;
 import com.xiaoa.tenant.dto.LoginRequest;
@@ -36,11 +37,12 @@ public class AccountService {
     private final InviteService inviteService;
     private final SessionService sessionService;
     private final PermissionService permissionService;
+    private final QuotaService quotaService;
 
     public AccountService(UserMapper userMapper, UserOrgRoleMapper userOrgRoleMapper,
                           UserWechatBindMapper userWechatBindMapper, TenantMapper tenantMapper,
                           OrgMapper orgMapper, InviteService inviteService, SessionService sessionService,
-                          PermissionService permissionService) {
+                          PermissionService permissionService, QuotaService quotaService) {
         this.userMapper = userMapper;
         this.userOrgRoleMapper = userOrgRoleMapper;
         this.userWechatBindMapper = userWechatBindMapper;
@@ -49,6 +51,7 @@ public class AccountService {
         this.inviteService = inviteService;
         this.sessionService = sessionService;
         this.permissionService = permissionService;
+        this.quotaService = quotaService;
     }
 
     public TokenResponse login(LoginRequest request) {
@@ -89,6 +92,10 @@ public class AccountService {
         role.setRole(inviteCode.getRole());
         role.setDataScope(4);
         userOrgRoleMapper.insert(role);
+        // 入店即建员工额度账户（余额0），查询无需判空；店长划拨后员工才有可消费额度。
+        if ("STAFF".equals(inviteCode.getRole())) {
+            quotaService.ensureStaffAccount(inviteCode.getTenantId(), role.getId());
+        }
         TokenResponse login = loginUser(user, inviteCode.getTenantId(), inviteCode.getStoreId(),
                 inviteCode.getRole(), 4);
         return new JoinStoreResponse(login, inviteCode.getStoreId());

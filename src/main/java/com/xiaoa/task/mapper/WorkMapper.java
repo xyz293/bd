@@ -18,22 +18,22 @@ public interface WorkMapper {
 
     @Insert("INSERT INTO `work` (tenant_id, user_id, type, media_task_id, platform, style_id, style_name, "
             + "user_input, ref_image_urls, prompt_template_id, prompt_template_version, status, copywriting, "
-            + "source_asset_ids) "
+            + "source_asset_ids, chat_session_id) "
             + "VALUES (#{tenantId}, #{userId}, #{type}, #{mediaTaskId}, #{platform}, #{styleId}, #{styleName}, "
             + "#{userInput}, #{refImageUrls}, #{promptTemplateId}, #{promptTemplateVersion}, #{status}, #{copywriting}, "
-            + "#{sourceAssetIds})")
+            + "#{sourceAssetIds}, #{chatSessionId})")
     @Options(useGeneratedKeys = true, keyProperty = "id", keyColumn = "id")
     int insert(Work work);
 
     @Select("SELECT id, tenant_id, user_id, type, media_task_id, platform, style_id, style_name, user_input, "
             + "ref_image_urls, prompt_template_id, prompt_template_version, content_url, copywriting, status, "
-            + "fail_reason, publish_status, caption, source_asset_ids, created_at, updated_at "
+            + "fail_reason, publish_status, caption, source_asset_ids, chat_session_id, created_at, updated_at "
             + "FROM `work` WHERE id = #{id} AND tenant_id = #{tenantId}")
     Work findById(@Param("id") Long id, @Param("tenantId") Long tenantId);
 
     @Select("SELECT id, tenant_id, user_id, type, media_task_id, platform, style_id, style_name, user_input, "
             + "ref_image_urls, prompt_template_id, prompt_template_version, content_url, copywriting, status, "
-            + "fail_reason, publish_status, caption, source_asset_ids, created_at, updated_at "
+            + "fail_reason, publish_status, caption, source_asset_ids, chat_session_id, created_at, updated_at "
             + "FROM `work` WHERE tenant_id = #{tenantId} AND publish_status = 'PENDING_AUDIT' AND status = 'SUCCESS' "
             + "ORDER BY updated_at DESC LIMIT #{limit}")
     java.util.List<Work> findPendingAudit(@Param("tenantId") Long tenantId, @Param("limit") int limit);

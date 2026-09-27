@@ -73,6 +73,10 @@ public class CaptionService {
         if (work == null) {
             return;
         }
+        // 对话模式来源的作品：成套文案直接用对话产出的文案（前端去配图后回填 caption），不再自动生成。
+        if (work.getChatSessionId() != null) {
+            return;
+        }
         AiRequest request = new AiRequest();
         request.setPrompt(buildContext(work));
         request.setStyleName(work.getStyleName());

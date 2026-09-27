@@ -23,6 +23,8 @@ public class GenerateRequest {
     private List<String> refImageUrls = new ArrayList<>();
     @Size(max = 20)
     private List<Long> assetIds = new ArrayList<>();
+    /** 可选：关联对话会话（"去配图"来源），有值时成套文案用对话产出，不再自动生成 */
+    private Long chatSessionId;
 
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
@@ -38,4 +40,6 @@ public class GenerateRequest {
     public void setRefImageUrls(List<String> refImageUrls) { this.refImageUrls = refImageUrls == null ? new ArrayList<>() : refImageUrls; }
     public List<Long> getAssetIds() { return assetIds; }
     public void setAssetIds(List<Long> assetIds) { this.assetIds = assetIds == null ? new ArrayList<>() : assetIds; }
+    public Long getChatSessionId() { return chatSessionId; }
+    public void setChatSessionId(Long chatSessionId) { this.chatSessionId = chatSessionId; }
 }

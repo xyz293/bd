@@ -61,6 +61,12 @@ public interface QuotaFlowMapper {
     long sumConsumed(@Param("tenantId") Long tenantId, @Param("from") LocalDateTime from,
                      @Param("to") LocalDateTime to);
 
+    @Select("SELECT id, tenant_id, account_id, biz_type, biz_id, amount, balance_after, idempotent_key, remark, created_at "
+            + "FROM quota_flow WHERE tenant_id = #{tenantId} AND biz_type = #{bizType} AND biz_id = #{bizId} "
+            + "ORDER BY id LIMIT 1")
+    QuotaFlow findByBizTypeAndBizId(@Param("tenantId") Long tenantId, @Param("bizType") String bizType,
+                                    @Param("bizId") String bizId);
+
     @Select("SELECT balance_after FROM quota_flow WHERE account_id = #{accountId} "
             + "ORDER BY id DESC LIMIT 1")
     Long findLatestBalanceAfter(@Param("accountId") Long accountId);

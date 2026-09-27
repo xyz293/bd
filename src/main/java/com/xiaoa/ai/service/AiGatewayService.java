@@ -86,9 +86,11 @@ public class AiGatewayService {
         work.setPromptTemplateVersion(prompt.getTemplate().getVersion());
         work.setStatus("PENDING");
         work.setSourceAssetIds(snapshotAssets(principal.getTenantId(), principal.getOrgId(), request.getAssetIds()));
+        work.setChatSessionId(request.getChatSessionId());
         workMapper.insert(work);
 
-        quotaService.consumeForAi(principal.getTenantId(), principal.getOrgId(), cost, work.getId());
+        quotaService.consumeForAi(principal.getTenantId(), principal.getOrgId(), principal.getUserId(),
+                principal.getRole(), cost, work.getId());
 
         MediaTask task = new MediaTask();
         task.setTenantId(principal.getTenantId());

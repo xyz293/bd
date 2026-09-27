@@ -31,7 +31,7 @@ public interface ContentPackageMapper {
      * 补发策略：查所有 publish_time 已过且仍 ACTIVE 的（不只当前分钟），服务重启错过窗口也能补发。
      */
     @Select("SELECT " + COLUMNS + " FROM content_package "
-            + "WHERE status = 1 AND publish_at &lt;= #{now} ORDER BY publish_at LIMIT #{limit}")
+            + "WHERE status = 1 AND publish_at <= #{now} ORDER BY publish_at LIMIT #{limit}")
     List<ContentPackage> selectDue(@Param("now") LocalDateTime now, @Param("limit") int limit);
 
     /**
