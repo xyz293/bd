@@ -1,5 +1,6 @@
 package com.xiaoa.quota.job;
 
+import com.xiaoa.common.lock.RedisDistributedLock;
 import com.xiaoa.quota.mapper.PaymentOrderMapper;
 import com.xiaoa.quota.mapper.QuotaAccountMapper;
 import com.xiaoa.quota.mapper.QuotaFlowMapper;
@@ -12,30 +13,51 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.TimeUnit;
+
 @Component
 public class QuotaReconcileJob {
 
     private static final Logger log = LoggerFactory.getLogger(QuotaReconcileJob.class);
+
+    /** 扫描级锁：对账含全量流水重放耗时较长，且多实例同时跑会重复写告警记录。 */
+    private static final String JOB_LOCK_KEY = "job:quota-reconcile";
 
     private final QuotaAccountMapper accountMapper;
     private final QuotaFlowMapper flowMapper;
     private final PaymentOrderMapper paymentOrderMapper;
     private final MediaTaskReconcileMapper mediaTaskMapper;
     private final QuotaReconcileMapper reconcileMapper;
+    private final RedisDistributedLock distributedLock;
 
     public QuotaReconcileJob(QuotaAccountMapper accountMapper, QuotaFlowMapper flowMapper,
                              PaymentOrderMapper paymentOrderMapper,
                              MediaTaskReconcileMapper mediaTaskMapper,
-                             QuotaReconcileMapper reconcileMapper) {
+                             QuotaReconcileMapper reconcileMapper,
+                             RedisDistributedLock distributedLock) {
         this.accountMapper = accountMapper;
         this.flowMapper = flowMapper;
         this.paymentOrderMapper = paymentOrderMapper;
         this.mediaTaskMapper = mediaTaskMapper;
         this.reconcileMapper = reconcileMapper;
+        this.distributedLock = distributedLock;
     }
 
     @Scheduled(cron = "${xiaoa.quota.reconcile-cron:0 0 2 * * ?}")
     public void reconcile() {
+        String requestId = distributedLock.newRequestId();
+        if (!distributedLock.tryLock(JOB_LOCK_KEY, requestId, 0, 30, TimeUnit.MINUTES)) {
+            log.info("其他实例正在执行额度对账，跳过本次调度");
+            return;
+        }
+        try {
+            doReconcile();
+        } finally {
+            distributedLock.unlock(JOB_LOCK_KEY, requestId);
+        }
+    }
+
+    private void doReconcile() {
         int alerts = 0;
         for (QuotaAccount account : accountMapper.findAll()) {
             Long latestBalance = flowMapper.findLatestBalanceAfter(account.getId());

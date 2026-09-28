@@ -7,38 +7,56 @@ import com.xiaoa.common.auth.AdminPermissionService;
 import com.xiaoa.common.auth.AuthPrincipal;
 import com.xiaoa.common.exception.BusinessException;
 import com.xiaoa.common.exception.ErrorCode;
+import com.xiaoa.common.lock.RedisDistributedLock;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class ExportService {
 
     private final ExportTaskMapper exportTaskMapper;
     private final AdminPermissionService permissionService;
+    private final RedisDistributedLock distributedLock;
 
-    public ExportService(ExportTaskMapper exportTaskMapper, AdminPermissionService permissionService) {
+    public ExportService(ExportTaskMapper exportTaskMapper, AdminPermissionService permissionService,
+                         RedisDistributedLock distributedLock) {
         this.exportTaskMapper = exportTaskMapper;
         this.permissionService = permissionService;
+        this.distributedLock = distributedLock;
     }
 
-    @Transactional
+    /**
+     * 创建导出任务：分布式锁保护「检查运行中数量 + 插入」的原子性，防止并发提交突破上限。
+     *
+     * <p>注意：锁必须加在事务外才有效（事务提交在方法返回后，锁内读到的 count 看不到未提交数据）。
+     * 本方法仅单条 insert，自身原子，因此不再标注 {@code @Transactional}。</p>
+     */
     public ExportTask create(CreateExportRequest request) {
         AuthPrincipal principal = permissionService.requiredWrite();
-        if (exportTaskMapper.countRunning(principal.getTenantId()) >= 3) {
-            throw new BusinessException(ErrorCode.DUPLICATE, "当前租户同时进行中的导出任务已达上限");
+        String lockKey = "export:create:" + principal.getTenantId();
+        String requestId = distributedLock.newRequestId();
+        if (!distributedLock.tryLock(lockKey, requestId, 0, 10, TimeUnit.SECONDS)) {
+            throw new BusinessException(ErrorCode.DUPLICATE, "导出任务创建中，请勿重复提交");
         }
-        ExportTask task = new ExportTask();
-        task.setTenantId(principal.getTenantId());
-        task.setCreatedBy(principal.getUserId());
-        task.setExportType(request.getExportType());
-        task.setQueryParams(request.getQueryParams());
-        task.setStatus(0);
-        exportTaskMapper.insert(task);
-        processAsync(task.getId(), task.getTenantId());
-        return task;
+        try {
+            if (exportTaskMapper.countRunning(principal.getTenantId()) >= 3) {
+                throw new BusinessException(ErrorCode.DUPLICATE, "当前租户同时进行中的导出任务已达上限");
+            }
+            ExportTask task = new ExportTask();
+            task.setTenantId(principal.getTenantId());
+            task.setCreatedBy(principal.getUserId());
+            task.setExportType(request.getExportType());
+            task.setQueryParams(request.getQueryParams());
+            task.setStatus(0);
+            exportTaskMapper.insert(task);
+            processAsync(task.getId(), task.getTenantId());
+            return task;
+        } finally {
+            distributedLock.unlock(lockKey, requestId);
+        }
     }
 
     public List<ExportTask> list() {
