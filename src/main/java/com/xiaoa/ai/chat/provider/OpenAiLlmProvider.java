@@ -138,9 +138,17 @@ public class OpenAiLlmProvider implements LlmProvider {
                     + "只输出 JSON，禁止多余文本：{\"question\":\"你的回复\"}";
         }
         if (LlmRequest.MODE_GATE.equals(mode)) {
-            return "判断当前上下文槽位是否足够生成珠宝内容文案。只输出 JSON，禁止多余文本："
-                    + "{\"ready\":true|false,\"options\":[\"建议员工补充的点\"]}\n"
-                    + "ready=false 时 options 给 2~3 条员工可能想说的快捷回复。";
+            return "你是珠宝门店「小AI」的信息充分性判断器（Gate Agent）。判断当前上下文是否足够直接生成内容。"
+                    + "只输出 JSON，禁止多余文本："
+                    + "{\"ready\":true|false,\"missing\":[\"缺口描述\"],\"options\":[\"给用户点选的候选方向\"],"
+                    + "\"needSkills\":[\"queryProduct\"],\"contextPatch\":{...},\"reason\":\"一句话理由\"}\n"
+                    + "- ready=true 表示可以直接生成，missing/options 输出空数组\n"
+                    + "- ready=false 时：missing 列出 1~3 个关键缺口；options 给 2~3 条用户可能点选的候选方向"
+                    + "（贴合珠宝门店实际，如具体商品方向/平台/风格）\n"
+                    + "- 可用技能：queryProduct=查询会话内已确认的商品资料；queryCalendar=查询未来30天营销节点。"
+                    + "ready=true 时把生成前需要查询的技能列入 needSkills\n"
+                    + "- contextPatch：从对话中抽到的槽位补丁（key 限 platform/scene/product/style/tone/"
+                    + "festival/versions/sellingPoint/audience/price/material），没抽到输出 {}";
         }
         // MODE_CHAT（及默认）：内容创作
         return "你是珠宝门店的资深内容策划，为员工写朋友圈/小红书/抖音文案。"
@@ -197,12 +205,12 @@ public class OpenAiLlmProvider implements LlmProvider {
             return LlmResponse.questionsOf(questions.isEmpty() ? null : questions);
         }
         if (LlmRequest.MODE_GATE.equals(mode)) {
-            List<String> options = new ArrayList<String>();
-            JsonNode optionNodes = node.path("options");
-            if (optionNodes.isArray()) {
-                optionNodes.forEach(item -> options.add(item.asText("")));
-            }
-            return LlmResponse.gate(node.path("ready").asBoolean(false), options.isEmpty() ? null : options);
+            LlmResponse response = LlmResponse.gate(node.path("ready").asBoolean(false), stringsOf(node.path("options")));
+            response.setMissing(stringsOf(node.path("missing")));
+            response.setNeedSkills(stringsOf(node.path("needSkills")));
+            response.setReason(node.path("reason").asText(null));
+            response.setContextPatchJson(patchOf(node));
+            return response;
         }
         if (LlmRequest.MODE_COMPOSE.equals(mode)) {
             return LlmResponse.compose(node.path("question").asText(""));
@@ -226,6 +234,15 @@ public class OpenAiLlmProvider implements LlmProvider {
     private String patchOf(JsonNode node) {
         JsonNode patch = node.path("contextPatch");
         return patch.isObject() ? patch.toString() : null;
+    }
+
+    /** JSON 字符串数组 → List（空数组返回 null，区分「未给」与「空」）。 */
+    private List<String> stringsOf(JsonNode array) {
+        List<String> values = new ArrayList<String>();
+        if (array != null && array.isArray()) {
+            array.forEach(item -> values.add(item.asText("")));
+        }
+        return values.isEmpty() ? null : values;
     }
 
     /** 剥离 markdown 围栏/闲话：取第一个 { 到最后一个 } 的片段解析。 */

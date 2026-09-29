@@ -167,16 +167,26 @@ public class DemoLlmProvider implements LlmProvider {
 
     // ==================== ⑤/⑦ 辅助模式（选项卡润色 / 口语化组装） ====================
 
-    /** 完整度判断（HITL 备用）：齐备则 ready，缺什么给什么候选选项。 */
+    /** 完整度判断（Gate）：缺商品 → 不够并给候选方向；够 → 默认需要商品资料技能（节日未定加日历）。 */
     private LlmResponse gate(LlmRequest request) {
         JsonNode context = parseContext(request.getContextJson());
-        List<String> options = new ArrayList<String>();
         if (isBlank(textOf(context, "product"))) {
-            options.add("我想宣传新品");
-            options.add("老客回馈活动");
-            return LlmResponse.gate(false, options);
+            List<String> options = new ArrayList<String>();
+            options.add("主推本店最近热销款");
+            options.add("宣传新品转运珠");
+            options.add("做婚戒对戒情感向");
+            LlmResponse response = LlmResponse.gate(false, options);
+            response.setMissing(java.util.Collections.singletonList("商品方向"));
+            return response;
         }
-        return LlmResponse.gate(true, null);
+        List<String> skills = new ArrayList<String>();
+        skills.add("queryProduct");
+        if (isBlank(textOf(context, "festival"))) {
+            skills.add("queryCalendar");
+        }
+        LlmResponse response = LlmResponse.gate(true, null);
+        response.setNeedSkills(skills);
+        return response;
     }
 
     /** 口语化组装：槽位齐备视为出稿包装场景，否则视为咨询/闲聊回复。 */

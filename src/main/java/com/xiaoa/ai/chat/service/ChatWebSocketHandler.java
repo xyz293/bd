@@ -252,17 +252,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         labels.put("fetchContext", "正在读取创作上下文…");
         // ② 理解意图
         labels.put("understandIntent", "正在理解你的需求…");
-        // ③ 问卷
-        labels.put("composeQuestionnaire", "正在生成确认问卷…");
-        labels.put("holdQuestionnaire", "等待你确认信息…");
+        // ③ Gate 充分性判断 + 技能取数
+        labels.put("gateAssess", "正在判断信息是否足够…");
+        labels.put("skillInvoke", "正在查询创作资料…");
         labels.put("mergeAnswers", "正在合并你的回答…");
-        labels.put("aiDecideSlots", "AI 正在为你补充信息…");
         // ④ 核验+扣额度
         labels.put("verifyAndCharge", "正在核验商品信息与额度…");
         labels.put("respondQuota", "正在整理额度提示…");
-        // ⑤ 选项卡
-        labels.put("composeOptionCard", "正在准备增值选项…");
-        labels.put("holdOptionCard", "等待你选择增值选项…");
+        // ⑤ 选项卡（信息不足挂起，用户选择后回 Gate 复判）
+        labels.put("presentOptionCard", "正在为你准备选项…");
         labels.put("applyOption", "正在应用你的选择…");
         // ⑥ 生成
         labels.put("generateContent", "正在生成内容…");

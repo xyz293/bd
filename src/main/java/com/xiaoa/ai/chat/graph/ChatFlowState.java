@@ -21,8 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>RESUME_NEW：正常新消息，从 ① fetch_context 开始</li>
  *   <li>RESUME_ANSWER：问卷作答恢复（挂起点1）→ 合并答案 → 回 ② 重算缺口</li>
- *   <li>RESUME_OPTION：选项卡选择恢复（挂起点2）→ 应用增益槽位 → 直进 ⑥</li>
- *   <li>RESUME_TIMEOUT：选项卡超时兜底（默认 D 直接生成）→ 直进 ⑥</li>
+ *   <li>RESUME_OPTION：选项卡选择恢复（挂起点）→ 应用用户选择 → 回 Gate 复判（循环）</li>
+ *   <li>RESUME_TIMEOUT：选项卡超时兜底 → AI 代选补齐 → 技能取数 → 直接生成</li>
  * </ul>
  */
 public class ChatFlowState {
@@ -46,6 +46,11 @@ public class ChatFlowState {
     public static final String TASK_IMAGE = "IMAGE";
     public static final String TASK_VIDEO = "VIDEO";
 
+    /** Gate 判定：信息足够 → 技能取数 + LLM 直接生成 */
+    public static final String SUFFICIENT_ENOUGH = "ENOUGH";
+    /** Gate 判定：信息不足 → 出选项卡挂起，用户选择后再判 */
+    public static final String SUFFICIENT_NOT = "NOT_ENOUGH";
+
     /** 回复推进动作（前后端契约） */
     public static final String REPLY_ASK = "ASK";
     public static final String REPLY_GENERATE = "GENERATE";
@@ -57,6 +62,8 @@ public class ChatFlowState {
 
     // ==================== 基础上下文 ====================
     private Mode mode;
+    /** 图线程标识（LangGraph thread_id 语义）：短期记忆/恢复按它定位，等于会话 ID 字符串 */
+    private String threadId;
     private AuthPrincipal principal;
     private ChatSession session;
     private ChatReviseRequest revise;
@@ -80,6 +87,24 @@ public class ChatFlowState {
     private List<String> missingRequired = new ArrayList<>();
     /** 增益候选（festival/tone/versions 中未定的） */
     private List<String> enhancementCandidates = new ArrayList<>();
+
+    // ==================== ②' gate_assess 产出（充分性判断 Agent） ====================
+    /** Gate 判定：ENOUGH / NOT_ENOUGH */
+    private String sufficiency;
+    /** Gate 判定的信息缺口（自然语言，如「商品方向」） */
+    private List<String> gateMissing = new ArrayList<>();
+    /** Gate 给出的候选方向（选项卡 A/B/C 文案来源） */
+    private List<String> gateOptions = new ArrayList<>();
+    /** Gate 判定生成前需要的技能（经注册表校验） */
+    private List<String> needSkills = new ArrayList<>();
+    /** Gate 判定理由（观测/埋点） */
+    private String gateReason;
+    /** Gate 已进行的判断轮次（含选项卡循环） */
+    private int gateRound;
+    /** 用户已选「直接生成」：Gate 不再询问，AI 代选补齐后直接生成 */
+    private boolean directGenerate;
+    /** SkillAgent 取回的资料 JSON（[{skill,info}]） */
+    private String skillFacts;
 
     // ==================== ③/⑤ 挂起载荷 ====================
     /** 问卷轮次（已消耗轮数，≤2） */
@@ -124,6 +149,7 @@ public class ChatFlowState {
     public static ChatFlowState forChat(AuthPrincipal principal, ChatSession session, String userInput) {
         ChatFlowState state = new ChatFlowState();
         state.mode = Mode.CHAT;
+        state.threadId = String.valueOf(session.getId());
         state.principal = principal;
         state.session = session;
         state.userInput = userInput;
@@ -159,9 +185,10 @@ public class ChatFlowState {
 
     /** 微调：从指定版本按指令改写（老链路保持） */
     public static ChatFlowState forRevise(AuthPrincipal principal, ChatSession session,
-                                          ChatReviseRequest revise) {
+                                           ChatReviseRequest revise) {
         ChatFlowState state = new ChatFlowState();
         state.mode = Mode.REVISE;
+        state.threadId = String.valueOf(session.getId());
         state.principal = principal;
         state.session = session;
         state.revise = revise;
@@ -184,12 +211,18 @@ public class ChatFlowState {
     // ==================== getter / setter ====================
 
     public Mode getMode() { return mode; }
+    public void setMode(Mode mode) { this.mode = mode; }
+    public String getThreadId() { return threadId; }
+    public void setThreadId(String threadId) { this.threadId = threadId; }
     public AuthPrincipal getPrincipal() { return principal; }
+    public void setPrincipal(AuthPrincipal principal) { this.principal = principal; }
     public ChatSession getSession() { return session; }
+    public void setSession(ChatSession session) { this.session = session; }
     public ChatReviseRequest getRevise() { return revise; }
     public String getUserInput() { return userInput; }
     public void setUserInput(String userInput) { this.userInput = userInput; }
     public String getResumeType() { return resumeType; }
+    public void setResumeType(String resumeType) { this.resumeType = resumeType; }
     public String getContextJson() { return contextJson; }
     public void setContextJson(String contextJson) { this.contextJson = contextJson; }
     public String getHistoryJson() { return historyJson; }
@@ -212,8 +245,10 @@ public class ChatFlowState {
     public OptionCardVO getOptionCard() { return optionCard; }
     public void setOptionCard(OptionCardVO optionCard) { this.optionCard = optionCard; }
     public String getOptionKey() { return optionKey; }
+    public void setOptionKey(String optionKey) { this.optionKey = optionKey; }
     public List<String> getAiDecidedSlots() { return aiDecidedSlots; }
     public FactReport getFactReport() { return factReport; }
+    public void setFactReport(FactReport factReport) { this.factReport = factReport; }
     public String getHoldKey() { return holdKey; }
     public void setHoldKey(String holdKey) { this.holdKey = holdKey; }
     public long getQuotaNeed() { return quotaNeed; }
@@ -240,4 +275,24 @@ public class ChatFlowState {
     public void setMediaWorkId(Long mediaWorkId) { this.mediaWorkId = mediaWorkId; }
     public ChatReplyVO getReply() { return reply; }
     public void setReply(ChatReplyVO reply) { this.reply = reply; }
+
+    // ==================== Gate / Skill（Agent 化新增） ====================
+
+    public String getSufficiency() { return sufficiency; }
+    public void setSufficiency(String sufficiency) { this.sufficiency = sufficiency; }
+    public boolean isSufficient() { return SUFFICIENT_ENOUGH.equals(sufficiency); }
+    public List<String> getGateMissing() { return gateMissing; }
+    public void setGateMissing(List<String> gateMissing) { this.gateMissing = gateMissing; }
+    public List<String> getGateOptions() { return gateOptions; }
+    public void setGateOptions(List<String> gateOptions) { this.gateOptions = gateOptions; }
+    public List<String> getNeedSkills() { return needSkills; }
+    public void setNeedSkills(List<String> needSkills) { this.needSkills = needSkills; }
+    public String getGateReason() { return gateReason; }
+    public void setGateReason(String gateReason) { this.gateReason = gateReason; }
+    public int getGateRound() { return gateRound; }
+    public void setGateRound(int gateRound) { this.gateRound = gateRound; }
+    public boolean isDirectGenerate() { return directGenerate; }
+    public void setDirectGenerate(boolean directGenerate) { this.directGenerate = directGenerate; }
+    public String getSkillFacts() { return skillFacts; }
+    public void setSkillFacts(String skillFacts) { this.skillFacts = skillFacts; }
 }

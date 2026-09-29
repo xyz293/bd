@@ -48,14 +48,17 @@ public class ChatFlowService {
     private final ChatSessionService sessionService;
     private final ChatMessageMapper messageMapper;
     private final ChatMemoryService memoryService;
+    private final ChatCheckpointService checkpointService;
     private final ChatFlowGraph chatFlowGraph;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ChatFlowService(ChatSessionService sessionService, ChatMessageMapper messageMapper,
-                           ChatMemoryService memoryService, ChatFlowGraph chatFlowGraph) {
+                           ChatMemoryService memoryService, ChatCheckpointService checkpointService,
+                           ChatFlowGraph chatFlowGraph) {
         this.sessionService = sessionService;
         this.messageMapper = messageMapper;
         this.memoryService = memoryService;
+        this.checkpointService = checkpointService;
         this.chatFlowGraph = chatFlowGraph;
     }
 
@@ -100,7 +103,15 @@ public class ChatFlowService {
                 answerJson(request));
         messageMapper.insert(userMessage);
 
-        ChatFlowState state = ChatFlowState.forAnswer(principal, session, answers);
+        ChatFlowState state = restoreCheckpoint(session);
+        if (state != null) {
+            // 从「停止之前的记忆」续跑：覆盖恢复指令与当前登录态
+            state.setResumeType(ChatFlowState.RESUME_ANSWER);
+            state.getAnswers().putAll(answers);
+            state.setPrincipal(principal);
+        } else {
+            state = ChatFlowState.forAnswer(principal, session, answers);
+        }
         chatFlowGraph.run(state);
         return state.getReply();
     }
@@ -122,7 +133,15 @@ public class ChatFlowService {
                 "{\"type\":\"option_card\",\"key\":\"" + request.getKey() + "\"}");
         messageMapper.insert(userMessage);
 
-        ChatFlowState state = ChatFlowState.forOption(principal, session, request.getKey());
+        ChatFlowState state = restoreCheckpoint(session);
+        if (state != null) {
+            // 从「停止之前的记忆」续跑：覆盖恢复指令与当前登录态
+            state.setResumeType(ChatFlowState.RESUME_OPTION);
+            state.setOptionKey(request.getKey());
+            state.setPrincipal(principal);
+        } else {
+            state = ChatFlowState.forOption(principal, session, request.getKey());
+        }
         chatFlowGraph.run(state);
         return state.getReply();
     }
@@ -145,13 +164,33 @@ public class ChatFlowService {
         TenantContext.setTenantId(pending.getTenantId());
         try {
             ChatSession session = sessionService.requireUsable(principal, pending.getSessionId());
-            ChatFlowState state = ChatFlowState.forTimeout(principal, session);
+            ChatFlowState state = restoreCheckpoint(session);
+            if (state != null) {
+                // 从「停止之前的记忆」续跑：默认 D 直接生成，覆盖恢复指令与当前身份
+                state.setResumeType(ChatFlowState.RESUME_TIMEOUT);
+                state.setPrincipal(principal);
+            } else {
+                state = ChatFlowState.forTimeout(principal, session);
+            }
             chatFlowGraph.run(state);
             memoryService.track(pending.getTenantId(), "option_card_timeout");
         } finally {
             AuthContext.clear();
             TenantContext.clear();
         }
+    }
+
+    /**
+     * 按 thread id（会话 ID）取回图停止前的状态（LangGraph checkpoint 语义）。
+     * 会话与登录态以当前请求为准覆盖，避免使用过期快照。
+     */
+    private ChatFlowState restoreCheckpoint(ChatSession session) {
+        ChatFlowState checkpoint = checkpointService.load(String.valueOf(session.getId()));
+        if (checkpoint == null) {
+            return null;
+        }
+        checkpoint.setSession(session);
+        return checkpoint;
     }
 
     // ==================== 微调入口 ====================

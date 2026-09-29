@@ -37,6 +37,12 @@ public class LlmResponse {
     private List<QuestionVO> questions;
     private Boolean ready;
     private List<String> options;
+    /** GATE：信息缺口描述（ready=false 时给出） */
+    private List<String> missing;
+    /** GATE：生成前需要调用的技能名（由 SkillRegistry 校验） */
+    private List<String> needSkills;
+    /** GATE：判定理由（观测） */
+    private String reason;
 
     public static LlmResponse ask(String question, String contextPatchJson) {
         LlmResponse response = new LlmResponse();
@@ -113,4 +119,10 @@ public class LlmResponse {
     public void setReady(Boolean ready) { this.ready = ready; }
     public List<String> getOptions() { return options; }
     public void setOptions(List<String> options) { this.options = options; }
+    public List<String> getMissing() { return missing; }
+    public void setMissing(List<String> missing) { this.missing = missing; }
+    public List<String> getNeedSkills() { return needSkills; }
+    public void setNeedSkills(List<String> needSkills) { this.needSkills = needSkills; }
+    public String getReason() { return reason; }
+    public void setReason(String reason) { this.reason = reason; }
 }
