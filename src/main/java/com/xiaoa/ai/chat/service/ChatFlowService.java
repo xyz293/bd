@@ -1,167 +1,177 @@
 package com.xiaoa.ai.chat.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.xiaoa.admin.service.ComplianceService;
-import com.xiaoa.ai.chat.mapper.ChatMessageMapper;
-import com.xiaoa.ai.chat.mapper.ChatSessionMapper;
-import com.xiaoa.ai.chat.model.ChatMessage;
-import com.xiaoa.ai.chat.model.ChatSession;
+import com.xiaoa.ai.chat.dto.ChatAnswerRequest;
+import com.xiaoa.ai.chat.dto.ChatOptionRequest;
 import com.xiaoa.ai.chat.dto.ChatReplyVO;
 import com.xiaoa.ai.chat.dto.ChatReviseRequest;
 import com.xiaoa.ai.chat.dto.ChatSendRequest;
-import com.xiaoa.ai.chat.provider.LlmProvider;
-import com.xiaoa.ai.chat.provider.LlmRequest;
-import com.xiaoa.ai.chat.provider.LlmResponse;
+import com.xiaoa.ai.chat.dto.PendingOption;
+import com.xiaoa.ai.chat.graph.ChatFlowGraph;
+import com.xiaoa.ai.chat.graph.ChatFlowState;
+import com.xiaoa.ai.chat.mapper.ChatMessageMapper;
+import com.xiaoa.ai.chat.model.ChatMessage;
+import com.xiaoa.ai.chat.model.ChatSession;
+import com.xiaoa.ai.graph.NodeListener;
 import com.xiaoa.common.auth.AuthContext;
 import com.xiaoa.common.auth.AuthPrincipal;
+import com.xiaoa.common.context.TenantContext;
 import com.xiaoa.common.exception.BusinessException;
 import com.xiaoa.common.exception.ErrorCode;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 对话编排核心：存消息 → 组装 LLM 请求（系统要素 + 最近10轮历史 + 本轮输入）→
- * 结构化返回（ASK 追问不扣费 / GENERATE 合规检查后扣费出稿）→ 合并要素上下文。
- * 出稿扣费失败整体回滚（AI 消息不落，员工重发）。
+ * 对话编排入口（方案 §9 接口契约的四个入口）：会话鉴权、落用户消息、事务边界。
+ *
+ * <ul>
+ *   <li>{@link #chat}：用户消息入口（POST /chat/message / WS chat.send）</li>
+ *   <li>{@link #answer}：问卷作答提交（挂起点1 恢复，POST /chat/answer / WS chat.answer）</li>
+ *   <li>{@link #option}：选项卡选择（挂起点2 恢复，POST /chat/option / WS chat.option）</li>
+ *   <li>{@link #releaseOptionTimeout}：选项卡超时兜底放行（调度线程调用，默认 D 直接生成）</li>
+ * </ul>
+ *
+ * <p>具体流程编排（问卷/选项卡/核验预扣/生成/合规/计费/落库）由状态图 {@link ChatFlowGraph}
+ * 驱动：上下文装入 {@link ChatFlowState} 后执行整张图并取回 reply。预扣（hold）在事务内，
+ * 任何失败异常穿透图执行整体回滚（额度自动释放，消息不落，员工可重发）。</p>
  */
 @Service
 public class ChatFlowService {
 
-    /** 携带给 LLM 的最近消息条数（10 轮 = 20 条） */
-    private static final int HISTORY_MESSAGES = 20;
-    private static final String FALLBACK_QUESTION = "能再具体一点吗？";
+    private static final String PENDING_QUESTIONNAIRE = "QUESTIONNAIRE";
+    private static final String PENDING_OPTION_CARD = "OPTION_CARD";
 
     private final ChatSessionService sessionService;
-    private final ChatSessionMapper sessionMapper;
     private final ChatMessageMapper messageMapper;
-    private final ChatBillingService billingService;
-    private final ComplianceService complianceService;
-    private final LlmProvider llmProvider;
+    private final ChatMemoryService memoryService;
+    private final ChatFlowGraph chatFlowGraph;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public ChatFlowService(ChatSessionService sessionService, ChatSessionMapper sessionMapper,
-                           ChatMessageMapper messageMapper, ChatBillingService billingService,
-                           ComplianceService complianceService, LlmProvider llmProvider) {
+    public ChatFlowService(ChatSessionService sessionService, ChatMessageMapper messageMapper,
+                           ChatMemoryService memoryService, ChatFlowGraph chatFlowGraph) {
         this.sessionService = sessionService;
-        this.sessionMapper = sessionMapper;
         this.messageMapper = messageMapper;
-        this.billingService = billingService;
-        this.complianceService = complianceService;
-        this.llmProvider = llmProvider;
+        this.memoryService = memoryService;
+        this.chatFlowGraph = chatFlowGraph;
     }
 
+    // ==================== 用户消息入口 ====================
+
     @Transactional
-    public ChatReplyVO chat(Long sessionId, ChatSendRequest request) {
-        AuthPrincipal principal = AuthContext.required();
+    public ChatReplyVO chat(AuthPrincipal principal, Long sessionId, ChatSendRequest request) {
+        return chat(principal, sessionId, request, null);
+    }
+
+    /** 带节点监听器的执行（对齐 LangGraph stream，供 WebSocket 阶段进度推送）。 */
+    @Transactional
+    public ChatReplyVO chat(AuthPrincipal principal, Long sessionId, ChatSendRequest request,
+                            @Nullable NodeListener<ChatFlowState> listener) {
         ChatSession session = sessionService.requireUsable(principal, sessionId);
-        Long tenantId = principal.getTenantId();
 
         // 1. 存用户消息（任何后续失败随事务回滚，员工可重发）
-        ChatMessage userMessage = message(tenantId, session, ChatMessage.ROLE_USER, request.getText());
+        ChatMessage userMessage = message(principal.getTenantId(), session, ChatMessage.ROLE_USER, request.getText());
         messageMapper.insert(userMessage);
 
-        // 2. 组装 LLM 请求：要素上下文 + 最近N轮历史 + 本轮输入
-        String contextJson = session.getContext() == null ? "{}" : session.getContext();
-        List<ChatMessage> recent = messageMapper.findRecent(session.getId(), HISTORY_MESSAGES);
-        Collections.reverse(recent);
-
-        // 3. 调 LLM（非法返回重试由 Provider 内处理；仍失败兜底追问）
-        LlmResponse response;
-        try {
-            response = llmProvider.complete(LlmRequest.chat(session.getScene(), contextJson,
-                    historyJson(recent), request.getText()));
-        } catch (RuntimeException exception) {
-            response = LlmResponse.ask(FALLBACK_QUESTION, null);
-        }
-
-        // 4. 分支处理
-        String mergedContext = mergeContext(contextJson, response.getContextPatchJson());
-        boolean generate = LlmResponse.ACTION_GENERATE.equals(response.getAction())
-                && response.getVersions() != null && !response.getVersions().isEmpty();
-        List<String> versions = new ArrayList<String>();
-        if (generate) {
-            for (String version : response.getVersions()) {
-                // 合规：level1 替换 / level2 拦截（拦截抛 4001，整体回滚）
-                versions.add(complianceService.filterText(tenantId, version));
-            }
-            boolean allBlank = true;
-            for (String version : versions) {
-                if (version != null && !version.trim().isEmpty()) {
-                    allBlank = false;
-                    break;
-                }
-            }
-            generate = !allBlank;
-        }
-        ChatMessage aiMessage;
-        if (generate) {
-            billingService.chargeForGenerate(principal, session.getId());
-            aiMessage = message(tenantId, session, ChatMessage.ROLE_AI,
-                    aiJson(LlmResponse.ACTION_GENERATE, null, versions, null));
-        } else {
-            String question = response.getQuestion() == null || response.getQuestion().trim().isEmpty()
-                    ? FALLBACK_QUESTION : response.getQuestion().trim();
-            aiMessage = message(tenantId, session, ChatMessage.ROLE_AI,
-                    aiJson(LlmResponse.ACTION_ASK, question, null, null));
-        }
-
-        // 5. 落 AI 消息并刷新会话要素上下文（同时刷新活跃时间）
-        messageMapper.insert(aiMessage);
-        sessionMapper.updateContext(tenantId, session.getId(), mergedContext);
-
-        return reply(session, aiMessage, mergedContext);
+        // 2. 执行对话状态图：①获取数据 → ②理解意图 → ③问卷(挂起) / ④核验预扣 → ⑤选项卡(挂起)
+        //    → ⑥生成 → ⑦审查回复 → 落库
+        ChatFlowState state = ChatFlowState.forChat(principal, session, request.getText());
+        runGraph(state, listener);
+        return state.getReply();
     }
 
+    // ==================== 问卷作答提交（挂起点1 恢复） ====================
+
+    /** 校验挂起 → 答案合并回 ② 重算缺口（轮次 +1，≤2 轮后仍缺由 AI 代选）。 */
     @Transactional
-    public ChatReplyVO revise(Long sessionId, ChatReviseRequest request) {
-        AuthPrincipal principal = AuthContext.required();
+    public ChatReplyVO answer(AuthPrincipal principal, Long sessionId, ChatAnswerRequest request) {
         ChatSession session = sessionService.requireUsable(principal, sessionId);
-        Long tenantId = principal.getTenantId();
-
-        ChatMessage lastGenerate = messageMapper.findLatestGenerate(session.getId());
-        if (lastGenerate == null) {
-            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "还没有可微调的文案版本");
+        if (!memoryService.isPending(sessionId, PENDING_QUESTIONNAIRE)) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "当前没有待回答的问卷");
         }
-        List<String> baseVersions = versionsOf(lastGenerate.getContent());
-        int versionNo = request.getVersionNo();
-        if (versionNo < 1 || versionNo > baseVersions.size()) {
-            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "版本号超出范围");
+        Map<String, String> answers = new LinkedHashMap<String, String>();
+        for (ChatAnswerRequest.AnswerItem item : request.getAnswers()) {
+            answers.put(item.getSlotKey(), item.getValue());
         }
-        String baseText = baseVersions.get(versionNo - 1);
+        ChatMessage userMessage = message(principal.getTenantId(), session, ChatMessage.ROLE_USER,
+                answerJson(request));
+        messageMapper.insert(userMessage);
 
-        LlmResponse response;
+        ChatFlowState state = ChatFlowState.forAnswer(principal, session, answers);
+        chatFlowGraph.run(state);
+        return state.getReply();
+    }
+
+    // ==================== 选项卡选择（挂起点2 恢复） ====================
+
+    /** 抢占挂起（与超时兜底任务竞争，被抢走说明已默认放行）→ 应用增益槽位 → 直进 ⑥。 */
+    @Transactional
+    public ChatReplyVO option(AuthPrincipal principal, Long sessionId, ChatOptionRequest request) {
+        ChatSession session = sessionService.requireUsable(principal, sessionId);
+        if (!memoryService.isPending(sessionId, PENDING_OPTION_CARD)) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "当前没有待选择的选项卡");
+        }
+        PendingOption pending = memoryService.takePendingOption(sessionId);
+        if (pending == null) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "选项卡已失效，内容可能已按默认生成");
+        }
+        ChatMessage userMessage = message(principal.getTenantId(), session, ChatMessage.ROLE_USER,
+                "{\"type\":\"option_card\",\"key\":\"" + request.getKey() + "\"}");
+        messageMapper.insert(userMessage);
+
+        ChatFlowState state = ChatFlowState.forOption(principal, session, request.getKey());
+        chatFlowGraph.run(state);
+        return state.getReply();
+    }
+
+    // ==================== 选项卡超时兜底（调度线程，默认 D 直接生成） ====================
+
+    /**
+     * 挂起 >60s 兜底放行（前端 30s 计时，后端 60s 兜底）：抢占挂起后以离线身份重建
+     * principal 执行图（默认 D，直接生成），结果照常落会话，用户回来可见。
+     * 调度线程无登录态/租户态，此处显式设置并最终清理。
+     */
+    @Transactional
+    public void releaseOptionTimeout(PendingOption pending) {
+        if (memoryService.takePendingOption(pending.getSessionId()) == null) {
+            return; // 已被用户抢占处理，跳过
+        }
+        AuthPrincipal principal = new AuthPrincipal(pending.getUserId(), pending.getTenantId(),
+                pending.getOrgId(), pending.getRole(), pending.getDataScope());
+        AuthContext.set(principal);
+        TenantContext.setTenantId(pending.getTenantId());
         try {
-            response = llmProvider.complete(LlmRequest.revise(session.getScene(), session.getContext(),
-                    baseText, request.getInstruction()));
-        } catch (RuntimeException exception) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "改写失败，请稍后重试");
+            ChatSession session = sessionService.requireUsable(principal, pending.getSessionId());
+            ChatFlowState state = ChatFlowState.forTimeout(principal, session);
+            chatFlowGraph.run(state);
+            memoryService.track(pending.getTenantId(), "option_card_timeout");
+        } finally {
+            AuthContext.clear();
+            TenantContext.clear();
         }
-        List<String> revised = response.getVersions();
-        if (revised == null || revised.isEmpty() || revised.get(0) == null || revised.get(0).trim().isEmpty()) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "改写失败，请稍后重试");
+    }
+
+    // ==================== 微调入口 ====================
+
+    @Transactional
+    public ChatReplyVO revise(AuthPrincipal principal, Long sessionId, ChatReviseRequest request) {
+        ChatSession session = sessionService.requireUsable(principal, sessionId);
+
+        // 执行微调状态图：校验版本 → LLM 改写 → 合规 → 计费 → 落库
+        ChatFlowState state = ChatFlowState.forRevise(principal, session, request);
+        chatFlowGraph.run(state);
+        return state.getReply();
+    }
+
+    private void runGraph(ChatFlowState state, NodeListener<ChatFlowState> listener) {
+        if (listener == null) {
+            chatFlowGraph.run(state);
+        } else {
+            chatFlowGraph.run(state, listener);
         }
-        String newText = complianceService.filterText(tenantId, revised.get(0));
-
-        int reviseSeq = (session.getReviseCount() == null ? 0 : session.getReviseCount()) + 1;
-        billingService.chargeForRevise(principal, session.getId(), reviseSeq);
-
-        List<String> newVersions = new ArrayList<String>();
-        newVersions.add(newText);
-        ChatMessage aiMessage = message(tenantId, session, ChatMessage.ROLE_AI,
-                aiJson(LlmResponse.ACTION_GENERATE, null, newVersions, versionNo));
-        messageMapper.insert(aiMessage);
-        sessionMapper.updateContext(tenantId, session.getId(),
-                session.getContext() == null ? "{}" : session.getContext());
-        sessionMapper.incrReviseCount(tenantId, session.getId());
-
-        return reply(session, aiMessage, session.getContext() == null ? "{}" : session.getContext());
     }
 
     private ChatMessage message(Long tenantId, ChatSession session, String role, String content) {
@@ -174,102 +184,12 @@ public class ChatFlowService {
         return message;
     }
 
-    private ChatReplyVO reply(ChatSession session, ChatMessage aiMessage, String context) {
-        ChatReplyVO vo = new ChatReplyVO();
-        vo.setSessionId(session.getId());
-        vo.setContext(context);
-        vo.setMessageId(aiMessage.getId());
+    /** 用户作答消息 JSON（落库留痕 + 埋点原料）。 */
+    private String answerJson(ChatAnswerRequest request) {
         try {
-            JsonNode node = objectMapper.readTree(aiMessage.getContent());
-            String action = node.path("action").asText("");
-            vo.setAction(action);
-            if (LlmResponse.ACTION_ASK.equals(action)) {
-                vo.setQuestion(node.path("question").asText(FALLBACK_QUESTION));
-            } else {
-                List<String> versions = new ArrayList<String>();
-                JsonNode array = node.path("versions");
-                if (array.isArray()) {
-                    array.forEach(item -> versions.add(item.asText("")));
-                }
-                vo.setVersions(versions);
-            }
+            return objectMapper.writeValueAsString(request);
         } catch (Exception exception) {
-            vo.setAction(LlmResponse.ACTION_ASK);
-            vo.setQuestion(FALLBACK_QUESTION);
-        }
-        return vo;
-    }
-
-    private String historyJson(List<ChatMessage> recent) {
-        try {
-            List<Map<String, String>> history = new ArrayList<Map<String, String>>();
-            for (ChatMessage item : recent) {
-                Map<String, String> entry = new HashMap<String, String>();
-                entry.put("role", item.getRole());
-                entry.put("content", item.getContent());
-                history.add(entry);
-            }
-            return objectMapper.writeValueAsString(history);
-        } catch (Exception exception) {
-            return "[]";
-        }
-    }
-
-    /** 把 LLM 返回的要素补丁合并回会话上下文（浅合并，LLM 值覆盖旧值） */
-    private String mergeContext(String contextJson, String patchJson) {
-        try {
-            JsonNode context = objectMapper.readTree(contextJson == null || contextJson.trim().isEmpty()
-                    ? "{}" : contextJson);
-            if (patchJson != null && !patchJson.trim().isEmpty()) {
-                JsonNode patch = objectMapper.readTree(patchJson);
-                if (patch.isObject()) {
-                    Map<String, Object> merged = new HashMap<String, Object>();
-                    context.fields().forEachRemaining(field -> merged.put(field.getKey(), field.getValue()));
-                    patch.fields().forEachRemaining(field -> merged.put(field.getKey(), field.getValue().asText()));
-                    return objectMapper.writeValueAsString(merged);
-                }
-            }
-            return contextJson;
-        } catch (Exception exception) {
-            return contextJson == null ? "{}" : contextJson;
-        }
-    }
-
-    private List<String> versionsOf(String aiContent) {
-        try {
-            JsonNode node = objectMapper.readTree(aiContent);
-            List<String> versions = new ArrayList<String>();
-            JsonNode array = node.path("versions");
-            if (array.isArray()) {
-                array.forEach(item -> versions.add(item.asText("")));
-            }
-            if (versions.isEmpty()) {
-                throw new BusinessException(ErrorCode.INVALID_PARAMETER, "历史消息里没有文案版本");
-            }
-            return versions;
-        } catch (BusinessException exception) {
-            throw exception;
-        } catch (Exception exception) {
-            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "历史消息格式异常");
-        }
-    }
-
-    private String aiJson(String action, String question, List<String> versions, Integer revisedFrom) {
-        try {
-            Map<String, Object> payload = new HashMap<String, Object>();
-            payload.put("action", action);
-            if (question != null) {
-                payload.put("question", question);
-            }
-            if (versions != null) {
-                payload.put("versions", versions);
-            }
-            if (revisedFrom != null) {
-                payload.put("revisedFrom", revisedFrom);
-            }
-            return objectMapper.writeValueAsString(payload);
-        } catch (Exception exception) {
-            return "{\"action\":\"" + LlmResponse.ACTION_ASK + "\",\"question\":\"" + FALLBACK_QUESTION + "\"}";
+            return "{\"type\":\"questionnaire_answer\"}";
         }
     }
 }

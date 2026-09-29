@@ -196,6 +196,19 @@ public class QuotaService {
     }
 
     /**
+     * 额度预校验（纯查询，不产生流水）：返回当前可扣余额。
+     * 供对话流程 quota_checker 节点在出稿前提前拦截额度不足，避免无效调用模型。
+     */
+    public Long availableBalance(Long tenantId, Long storeId, Long userId, String role) {
+        Long accountId = resolveChargeAccountId(tenantId, storeId, userId, role);
+        QuotaAccount account = accountMapper.findById(tenantId, accountId);
+        if (account == null || account.getBalance() == null || account.getBalance() < 0) {
+            return 0L;
+        }
+        return account.getBalance();
+    }
+
+    /**
      * 按账户 ID 扣费（对话/AI 生成统一入口），幂等键防重。
      */
     public void chargeAccount(Long tenantId, Long accountId, Long amount, String idempotentKey, String remark) {
@@ -279,6 +292,25 @@ public class QuotaService {
         }
         apply(tenantId, account, amount, QuotaBizType.REFUND, "refund:" + taskId,
                 "refund:" + taskId, "AI生成失败退款");
+    }
+
+    /**
+     * 对话创作预扣释放（hold→失败/放弃时退回）：按 hold 幂等键推导 release 幂等键，
+     * 与 AI 生成退款同用 REFUND 流水，幂等防重复释放。
+     */
+    @Transactional
+    public void releaseHold(Long tenantId, Long storeId, Long userId, String role,
+                            Long amount, String holdKey) {
+        if (amount == null || amount <= 0 || holdKey == null || holdKey.trim().isEmpty()) {
+            return;
+        }
+        Long accountId = resolveChargeAccountId(tenantId, storeId, userId, role);
+        QuotaAccount account = accountMapper.findById(tenantId, accountId);
+        if (account == null) {
+            account = ensureStoreAccount(tenantId, storeId);
+        }
+        String releaseKey = "release:" + holdKey;
+        apply(tenantId, account, amount, QuotaBizType.REFUND, releaseKey, releaseKey, "对话创作预扣释放");
     }
 
     public QuotaAccount getStore(Long storeId) {

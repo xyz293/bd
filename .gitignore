@@ -11,3 +11,6 @@ logs/
 *.log
 
 .env
+
+# 本地私密配置（API Key 等，禁止提交）
+src/main/resources/application-local.yml

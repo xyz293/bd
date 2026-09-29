@@ -7,6 +7,9 @@ spring:
     name: xiaoa-backend
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  # 本地私密配置（API Key 等），存在则覆盖本文件同名字段；文件已入 .gitignore，不含 key 时跳过不报错
+  config:
+    import: optional:classpath:application-local.yml
   servlet:
     multipart:
       max-file-size: ${MULTIPART_MAX_FILE_SIZE:110MB}
@@ -65,6 +68,14 @@ xiaoa:
   storage:
     local-dir: ${STORAGE_LOCAL_DIR:./data/storage}
   ai:
+    llm:
+      # openai = OpenAI 兼容协议（chat/completions，支持任意兼容网关）；demo = 规则版（不调外部模型）；http = 自定义协议
+      type: ${AI_LLM_TYPE:openai}
+      base-url: ${AI_LLM_BASE_URL:https://hihiamu.com/v1}
+      # key 优先从环境变量 AI_LLM_API_KEY 注入；本地开发写在 application-local.yml（不入库）
+      api-key: ${AI_LLM_API_KEY:}
+      model: ${AI_LLM_MODEL:gpt-6-luna}
+      timeout-ms: ${AI_LLM_TIMEOUT_MS:60000}
     provider:
       type: ${AI_PROVIDER_TYPE:demo}
       image-url: ${AI_IMAGE_URL:}
