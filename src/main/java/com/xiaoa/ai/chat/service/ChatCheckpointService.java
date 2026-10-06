@@ -10,14 +10,15 @@ import java.time.Duration;
 
 /**
  * 图状态短期记忆（LangGraph checkpoint 语义）：
- * 每次编排停止（问卷/选项卡挂起，或出稿完成）前，把完整 {@link ChatFlowState}
- * 序列化存入 Redis；第二次请求（问卷作答 / 选项卡选择 / 超时兜底）携带
- * thread id（= 会话 ID）取回「停止之前的记忆」续跑，而非重新装配状态。
+ * <b>仅在选项卡挂起（编排暂停等用户选择）时保存</b>完整 {@link ChatFlowState}；
+ * 第二次请求（选项卡选择 / 超时兜底）按任务 id（与会话 id 分离，
+ * 经「会话 → 任务 id」映射定位）取回「停止之前的记忆」续跑。
+ * 作品生成等终结态不再保存（编排出口会顺带释放任务态），任务态不跨创作复用。
  *
  * <p>键设计：{@code chat:ckpt:{threadId}}，TTL 2h（与会话记忆一致）。</p>
  *
  * <p>降级语义：checkpoint 写入/读取失败只打日志不抛错——恢复入口取不到时
- * 回退到重建式装配（forAnswer/forOption/forTimeout），链路可用性不受影响。</p>
+ * 回退到重建式装配（forOption/forTimeout），链路可用性不受影响。</p>
  */
 @Service
 public class ChatCheckpointService {

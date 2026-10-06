@@ -1,5 +1,6 @@
 package com.xiaoa.ai.chat.provider;
 
+import com.xiaoa.ai.chat.dto.QOptionVO;
 import com.xiaoa.ai.chat.dto.QuestionVO;
 
 import java.util.List;
@@ -8,7 +9,7 @@ import java.util.List;
  * LLM 结构化返回：action=ASK 追问（question）；action=GENERATE 出稿（versions）。
  * contextPatchJson 为要素补丁，由服务层合并回 session.context。
  *
- * <p>图节点扩展字段：intent/taskType（意图识别）、questions（动态问卷）、
+ * <p>图节点扩展字段：intent/taskType（意图识别）、cardOptions（选项卡，LLM 思考生成）、
  * ready/options（HITL 候选选项）。</p>
  */
 public class LlmResponse {
@@ -35,6 +36,8 @@ public class LlmResponse {
     private String taskType;
     /** 动态问卷题目（intent 模式之外的独立模式输出） */
     private List<QuestionVO> questions;
+    /** OPTIONS 模式：LLM 思考生成的选项卡选项（题干走 question 字段） */
+    private List<QOptionVO> cardOptions;
     private Boolean ready;
     private List<String> options;
     /** GATE：信息缺口描述（ready=false 时给出） */
@@ -43,6 +46,12 @@ public class LlmResponse {
     private List<String> needSkills;
     /** GATE：判定理由（观测） */
     private String reason;
+    /** REACT：本轮思考（观测/埋点） */
+    private String thought;
+    /** REACT：下一步行动（技能名或 FINISH） */
+    private String toolName;
+    /** REACT：行动入参（actionInput JSON） */
+    private String toolArgs;
 
     public static LlmResponse ask(String question, String contextPatchJson) {
         LlmResponse response = new LlmResponse();
@@ -93,6 +102,25 @@ public class LlmResponse {
         return response;
     }
 
+    /** 选项卡（OPTIONS 模式）：题干 + LLM 思考生成的选项。 */
+    public static LlmResponse cardOptionsOf(String question, List<QOptionVO> cardOptions) {
+        LlmResponse response = new LlmResponse();
+        response.action = ACTION_ASK;
+        response.question = question;
+        response.cardOptions = cardOptions;
+        return response;
+    }
+
+    /** ReAct 单步输出（SkillAgent 循环）：思考 + 下一步行动（技能名或 FINISH）+ 入参。 */
+    public static LlmResponse reactStep(String thought, String toolName, String toolArgs) {
+        LlmResponse response = new LlmResponse();
+        response.action = ACTION_ASK;
+        response.thought = thought;
+        response.toolName = toolName;
+        response.toolArgs = toolArgs;
+        return response;
+    }
+
     /** 槽位抽取结果（slot_extractor 节点，仅携带 contextPatch） */
     public static LlmResponse slotOf(String contextPatchJson) {
         LlmResponse response = new LlmResponse();
@@ -115,6 +143,8 @@ public class LlmResponse {
     public void setTaskType(String taskType) { this.taskType = taskType; }
     public List<QuestionVO> getQuestions() { return questions; }
     public void setQuestions(List<QuestionVO> questions) { this.questions = questions; }
+    public List<QOptionVO> getCardOptions() { return cardOptions; }
+    public void setCardOptions(List<QOptionVO> cardOptions) { this.cardOptions = cardOptions; }
     public Boolean getReady() { return ready; }
     public void setReady(Boolean ready) { this.ready = ready; }
     public List<String> getOptions() { return options; }
@@ -125,4 +155,10 @@ public class LlmResponse {
     public void setNeedSkills(List<String> needSkills) { this.needSkills = needSkills; }
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
+    public String getThought() { return thought; }
+    public void setThought(String thought) { this.thought = thought; }
+    public String getToolName() { return toolName; }
+    public void setToolName(String toolName) { this.toolName = toolName; }
+    public String getToolArgs() { return toolArgs; }
+    public void setToolArgs(String toolArgs) { this.toolArgs = toolArgs; }
 }

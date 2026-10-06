@@ -1,6 +1,5 @@
 package com.xiaoa.ai.chat.controller;
 
-import com.xiaoa.ai.chat.dto.ChatAnswerRequest;
 import com.xiaoa.ai.chat.dto.ChatOptionRequest;
 import com.xiaoa.ai.chat.dto.ChatReplyVO;
 import com.xiaoa.ai.chat.dto.ChatReviseRequest;
@@ -82,13 +81,7 @@ public class ChatController {
         return Result.success(flowService.chat(AuthContext.required(), id, request));
     }
 
-    /** 问卷作答提交（挂起点1 恢复：答案合并 → 回 ② 重算缺口，轮次 ≤2） */
-    @PostMapping("/sessions/{id}/answer")
-    public Result<ChatReplyVO> answer(@PathVariable Long id, @Valid @RequestBody ChatAnswerRequest request) {
-        return Result.success(flowService.answer(AuthContext.required(), id, request));
-    }
-
-    /** 选项卡选择（挂起点2 恢复：应用增益槽位 → 直进 ⑥；不选/超时由后端按 D 兑底放行） */
+    /** 选项卡选择（挂起恢复：应用用户选择 → 回 Gate 复判；不选/超时由后端按 D 兜底放行） */
     @PostMapping("/sessions/{id}/option")
     public Result<ChatReplyVO> option(@PathVariable Long id, @Valid @RequestBody ChatOptionRequest request) {
         return Result.success(flowService.option(AuthContext.required(), id, request));

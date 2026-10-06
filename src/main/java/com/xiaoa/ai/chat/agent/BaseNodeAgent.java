@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xiaoa.ai.chat.graph.ChatFlowState;
 import com.xiaoa.ai.chat.model.ChatMessage;
+import com.xiaoa.ai.chat.provider.AgentPromptProperties;
+import com.xiaoa.ai.chat.provider.LlmRequest;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -12,18 +14,22 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 节点 Agent 基类：内置「隔离记忆读写」（remember/recall，按 name() 命名空间）
- * 与各节点常用的上下文解析辅助，子类只写业务逻辑。
+ * 节点 Agent 基类：内置「隔离记忆读写」（remember/recall，按 name() 命名空间）、
+ * 各节点常用的上下文解析辅助，以及「每个 Agent 自己的提示词」的注入与携带
+ * （提示词 YAML 可配：xiaoa.ai.llm.prompts.*，未配置回退内置默认），子类只写业务逻辑。
  */
 public abstract class BaseNodeAgent implements NodeAgent {
 
     protected static final String FALLBACK_QUESTION = "能再具体一点吗？";
 
     protected final AgentMemoryService agentMemory;
+    /** 本 Agent 的提示词配置（YAML 注入，每个 Agent 一个 key） */
+    protected final AgentPromptProperties prompts;
     protected final ObjectMapper objectMapper = new ObjectMapper();
 
-    protected BaseNodeAgent(AgentMemoryService agentMemory) {
+    protected BaseNodeAgent(AgentMemoryService agentMemory, AgentPromptProperties prompts) {
         this.agentMemory = agentMemory;
+        this.prompts = prompts;
     }
 
     // ==================== 隔离记忆（本 Agent 命名空间） ====================
@@ -72,6 +78,19 @@ public abstract class BaseNodeAgent implements NodeAgent {
                     + "有了画面感。" + prefix + "这个" + scene + "，让心意被看见。");
         }
         return versions;
+    }
+
+    // ==================== LLM 请求（Agent 自带提示词） ====================
+
+    /** 发起 LLM 请求：自动携带本 Agent 的提示词（YAML xiaoa.ai.llm.prompts.<agent> 可配）。 */
+    protected LlmRequest withPrompt(LlmRequest request) {
+        return withPrompt(request, systemPrompt());
+    }
+
+    /** 发起 LLM 请求（一个 Agent 承担多种 LLM 模式时显式指定提示词，如生成 Agent 的 chat/revise）。 */
+    protected LlmRequest withPrompt(LlmRequest request, String systemPrompt) {
+        request.setSystemPrompt(systemPrompt);
+        return request;
     }
 
     // ==================== JSON / 字符串辅助 ====================

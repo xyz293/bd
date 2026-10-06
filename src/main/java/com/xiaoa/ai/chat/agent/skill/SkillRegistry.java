@@ -61,6 +61,14 @@ public class SkillRegistry {
         return selected;
     }
 
+    /** 按名查找技能（ReAct Agent 单步执行用），未知技能返回 null。 */
+    public Skill find(String name) {
+        if (name == null) {
+            return null;
+        }
+        return skillMap.get(name.trim());
+    }
+
     /** 已注册技能目录（name=description），可拼进 Gate 提示词。 */
     public String catalog() {
         StringBuilder catalog = new StringBuilder();

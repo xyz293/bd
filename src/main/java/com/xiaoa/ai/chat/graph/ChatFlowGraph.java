@@ -1,20 +1,10 @@
 package com.xiaoa.ai.chat.graph;
 
-import com.xiaoa.ai.chat.agent.ChargeAgent;
 import com.xiaoa.ai.chat.agent.ComposerAgent;
-import com.xiaoa.ai.chat.agent.ConsultAgent;
-import com.xiaoa.ai.chat.agent.ContextAgent;
 import com.xiaoa.ai.chat.agent.GenerateAgent;
 import com.xiaoa.ai.chat.agent.GateAgent;
-import com.xiaoa.ai.chat.agent.IntentAgent;
-import com.xiaoa.ai.chat.agent.MediaAgent;
 import com.xiaoa.ai.chat.agent.OptionAgent;
-import com.xiaoa.ai.chat.agent.PersistAgent;
-import com.xiaoa.ai.chat.agent.QuotaAgent;
-import com.xiaoa.ai.chat.agent.ReviewAgent;
-import com.xiaoa.ai.chat.agent.ReviseAgent;
 import com.xiaoa.ai.chat.agent.SkillAgent;
-import com.xiaoa.ai.chat.agent.AnswerAgent;
 import com.xiaoa.ai.graph.CompiledGraph;
 import com.xiaoa.ai.graph.NodeListener;
 import com.xiaoa.ai.graph.StateGraph;
@@ -25,74 +15,53 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 珠宝门店 AI 创作顾问 · 对话创作状态图（Agent 化编排）。
- * 每个图节点 = 一个 Agent（{@link com.xiaoa.ai.chat.agent} 包），
+ * 珠宝门店 AI 创作顾问 · 对话创作状态图（极简 5-Agent 编排）。
+ * <p>每个图节点 = 一个 Agent（{@link com.xiaoa.ai.chat.agent} 包），
  * Agent 记忆按命名空间隔离（AgentMemoryService：chat:agent:{threadId}:{agentName}），
- * 每个 Agent 只持有自己业务逻辑所需的记忆，跨 Agent 通信走共享 {@link ChatFlowState}。
+ * 每个 Agent 只持有自己业务逻辑所需的记忆，跨 Agent 通信走共享 {@link ChatFlowState}。</p>
  *
- * <p>核心循环（HITL Gate，额度逻辑保持不变）：</p>
  * <pre>
- * START ‹resume›──NEW──> contextAgent ──> intentAgent ‹intent›
- *   │                                      ├─ CONSULT ──> consultAgent ──────────────────────────┐
- *   │                                      ├─ REVISE ───> reviseValidate → reviseCallLlm         │
- *   │                                      │              → reviseCompliance → reviseBilling ────┤
- *   │                                      └─ NEW_CREATE ─> gateAgent ‹sufficiency›               │
- *   │                                              ├─ ENOUGH ──> skillAgent → verifyAndCharge ‹quota›
- *   │                                              │                              ├─ ok ──> generateAgent ‹taskType›
- *   │                                              │                              │           ├─ COPY ──> reviewAgent → billingConfirm ┐
- *   │                                              │                              │           └─ MEDIA ─> mediaAgent(挂起) ────────────┤
- *   │                                              │                              └─ short ─> quotaAgent ─────────────────────────────┤
- *   │                                              └─ NOT_ENOUGH ─> presentOptionCard(挂起) ─────────────────────────────────────────────────┤
- *   │                                                                                                                                       v
- *   └──ANSWER──> mergeAnswers ──┐                                           responseComposer ─> persist ─> END
- *      └──OPTION──> applyOption ┴──> gateAgent（用户选择后再次判断，循环；3 轮封顶 AI 代选）
- *      └──TIMEOUT─> gateAgent（AI 代选补齐 → 技能 → 生成）
+ * START ‹resume›
+ *   ├─ REVISE(mode，REST 微调) ──────────────> generateContent（按最近出稿改写）──┐
+ *   ├─ OPTION(选项卡恢复) ──> applyOption ──> gateAssess ‹sufficiency/intent›    │
+ *   ├─ TIMEOUT(超时兜底) ───────────────────> gateAssess                        │
+ *   └─ NEW(新消息) ────────────────────────> gateAssess                         │
+ *        ├─ CONSULT（闲聊/咨询）──────────────────────────────> compose ──> END   │
+ *        ├─ REVISE（对话内微调意图）──────────────────────────> generateContent ──┤
+ *        ├─ NOT_ENOUGH ──> presentOptionCard（挂起，30s 倒计时/60s 兜底）──> compose │
+ *        └─ ENOUGH ──> skillInvoke（ReAct 收集知识）──> generateContent（预扣额度+生成+合规）┘
  * </pre>
  *
+ * <p>五个 Agent 职责：</p>
+ * <ul>
+ *   <li>GateAgent：判断信息够不够（兼意图识别/槽位抽取/营销日历装配）；</li>
+ *   <li>SkillAgent：收集知识（ReAct：思考→行动→观察，只信技能返回）；</li>
+ *   <li>OptionAgent：给出 option（维度化选项卡挂起/应用选择回 Gate 复判）；</li>
+ *   <li>GenerateAgent：生成（兼额度预扣、微调改写、合规过滤）；</li>
+ *   <li>ComposerAgent：整合（咨询/额度话术/三段式包装 + AI 消息落库 + checkpoint + 回复 VO）。</li>
+ * </ul>
+ *
  * <p>事务语义：事务边界在 {@code ChatFlowService}（@Transactional）。预扣（hold）在同一事务内，
- * 任何异常整体回滚即自动释放额度；confirm 为资金无操作（预扣即扣费）。</p>
+ * 任何异常整体回滚即自动释放额度。</p>
  */
 @Component
 public class ChatFlowGraph {
 
-    private final ContextAgent contextAgent;
-    private final IntentAgent intentAgent;
     private final GateAgent gateAgent;
-    private final OptionAgent optionAgent;
     private final SkillAgent skillAgent;
-    private final ChargeAgent chargeAgent;
+    private final OptionAgent optionAgent;
     private final GenerateAgent generateAgent;
-    private final MediaAgent mediaAgent;
-    private final ReviewAgent reviewAgent;
-    private final ConsultAgent consultAgent;
-    private final QuotaAgent quotaAgent;
-    private final ReviseAgent reviseAgent;
-    private final AnswerAgent answerAgent;
     private final ComposerAgent composerAgent;
-    private final PersistAgent persistAgent;
 
     private final CompiledGraph<ChatFlowState> graph;
 
-    public ChatFlowGraph(ContextAgent contextAgent, IntentAgent intentAgent, GateAgent gateAgent,
-                         OptionAgent optionAgent, SkillAgent skillAgent, ChargeAgent chargeAgent,
-                         GenerateAgent generateAgent, MediaAgent mediaAgent, ReviewAgent reviewAgent,
-                         ConsultAgent consultAgent, QuotaAgent quotaAgent, ReviseAgent reviseAgent,
-                         AnswerAgent answerAgent, ComposerAgent composerAgent, PersistAgent persistAgent) {
-        this.contextAgent = contextAgent;
-        this.intentAgent = intentAgent;
+    public ChatFlowGraph(GateAgent gateAgent, SkillAgent skillAgent, OptionAgent optionAgent,
+                         GenerateAgent generateAgent, ComposerAgent composerAgent) {
         this.gateAgent = gateAgent;
-        this.optionAgent = optionAgent;
         this.skillAgent = skillAgent;
-        this.chargeAgent = chargeAgent;
+        this.optionAgent = optionAgent;
         this.generateAgent = generateAgent;
-        this.mediaAgent = mediaAgent;
-        this.reviewAgent = reviewAgent;
-        this.consultAgent = consultAgent;
-        this.quotaAgent = quotaAgent;
-        this.reviseAgent = reviseAgent;
-        this.answerAgent = answerAgent;
         this.composerAgent = composerAgent;
-        this.persistAgent = persistAgent;
         this.graph = buildGraph();
     }
 
@@ -108,94 +77,59 @@ public class ChatFlowGraph {
 
     private CompiledGraph<ChatFlowState> buildGraph() {
         return new StateGraph<ChatFlowState>()
-                // 每个节点 = 一个 Agent
-                .addNode("fetchContext", contextAgent::invoke)
-                .addNode("understandIntent", intentAgent::invoke)
+                // 每个节点 = 一个 Agent（OptionAgent 占两个节点：出卡挂起 / 应用选择）
                 .addNode("gateAssess", gateAgent::invoke)
                 .addNode("skillInvoke", skillAgent::invoke)
-                .addNode("verifyAndCharge", chargeAgent::invoke)
+                .addNode("generateContent", generateAgent::invoke)
                 .addNode("presentOptionCard", optionAgent::present)
                 .addNode("applyOption", optionAgent::applyChoice)
-                .addNode("generateContent", generateAgent::invoke)
-                .addNode("mediaSubmit", mediaAgent::invoke)
-                .addNode("reviewAndRespond", reviewAgent::invoke)
-                .addNode("billingConfirm", chargeAgent::confirmHoldNode)
-                .addNode("respondConsult", consultAgent::invoke)
-                .addNode("respondQuota", quotaAgent::invoke)
-                .addNode("mergeAnswers", answerAgent::invoke)
-                .addNode("reviseValidate", reviseAgent::validate)
-                .addNode("reviseCallLlm", reviseAgent::callLlm)
-                .addNode("reviseCompliance", reviseAgent::compliance)
-                .addNode("reviseBilling", reviseAgent::billing)
-                .addNode("responseComposer", composerAgent::invoke)
-                .addNode("persist", persistAgent::invoke)
-                // START 路由：正常新消息 / 挂起恢复（问卷作答兼容、选项卡选择、超时兜底）、微调
+                .addNode("compose", composerAgent::invoke)
+                // START 路由：正常新消息 / 选项卡恢复 / 超时兜底 / REST 微调
                 .addConditionalEdges(StateGraph.START, this::resumeRouter,
-                        branches(ChatFlowState.RESUME_NEW, "fetchContext",
-                                ChatFlowState.RESUME_ANSWER, "mergeAnswers",
+                        branches(ChatFlowState.RESUME_NEW, "gateAssess",
                                 ChatFlowState.RESUME_OPTION, "applyOption",
                                 ChatFlowState.RESUME_TIMEOUT, "gateAssess",
-                                ChatFlowState.INTENT_REVISE, "reviseValidate"))
-                .addEdge("fetchContext", "understandIntent")
-                .addConditionalEdges("understandIntent", this::routeAfterIntent,
-                        branches(ChatFlowState.INTENT_CONSULT, "respondConsult",
-                                ChatFlowState.INTENT_REVISE, "reviseValidate",
-                                ChatFlowState.INTENT_NEW_CREATE, "gateAssess"))
-                // Gate 判定：够 → 技能取数；不够 → 选项卡挂起
-                .addConditionalEdges("gateAssess",
-                        state -> state.isSufficient() ? "enough" : "short",
-                        branches("enough", "skillInvoke", "short", "presentOptionCard"))
-                .addEdge("presentOptionCard", "responseComposer")
-                // 兼容：问卷作答合并后也回 Gate 复判
-                .addEdge("mergeAnswers", "gateAssess")
-                // 核心循环：用户选择选项卡后再次进入 Gate 判断
+                                ChatFlowState.INTENT_REVISE, "generateContent"))
+                // Gate：一次 LLM 完成意图 + 抽槽位 + 充分性判断
+                .addConditionalEdges("gateAssess", this::routeAfterGate,
+                        branches(ChatFlowState.INTENT_CONSULT, "compose",
+                                ChatFlowState.INTENT_REVISE, "generateContent",
+                                "enough", "skillInvoke",
+                                "short", "presentOptionCard"))
+                // 核心循环：用户选择选项卡后再次进入 Gate 判断（3 轮封顶 AI 代选）
                 .addEdge("applyOption", "gateAssess")
-                .addEdge("skillInvoke", "verifyAndCharge")
-                .addConditionalEdges("verifyAndCharge",
-                        state -> state.isQuotaOk() ? "ok" : "short",
-                        branches("ok", "generateContent", "short", "respondQuota"))
-                .addConditionalEdges("generateContent",
-                        state -> ChatFlowState.TASK_COPY.equals(state.getTaskType()) ? "copy" : "media",
-                        branches("copy", "reviewAndRespond", "media", "mediaSubmit"))
-                .addEdge("mediaSubmit", "responseComposer")
-                .addEdge("reviewAndRespond", "billingConfirm")
-                .addEdge("billingConfirm", "responseComposer")
-                .addEdge("respondConsult", "responseComposer")
-                .addEdge("respondQuota", "responseComposer")
-                .addEdge("reviseValidate", "reviseCallLlm")
-                .addEdge("reviseCallLlm", "reviseCompliance")
-                .addEdge("reviseCompliance", "reviseBilling")
-                .addEdge("reviseBilling", "responseComposer")
-                .addEdge("responseComposer", "persist")
-                .addEdge("persist", StateGraph.END)
+                // 挂起也走统一出口（选项卡消息落库，前端展示倒计时卡片）
+                .addEdge("presentOptionCard", "compose")
+                // 够 → 收集知识 → 生成 → 整合落库
+                .addEdge("skillInvoke", "generateContent")
+                .addEdge("generateContent", "compose")
+                .addEdge("compose", StateGraph.END)
                 .compile();
     }
 
     // ==================== 路由（图级决策，逻辑在 Agent） ====================
 
-    /** 微调请求优先；否则按恢复类型路由（问卷作答 / 选项卡选择 / 超时兜底 / 正常新消息）。 */
+    /** REST 微调请求优先；否则按恢复类型路由（选项卡选择 / 超时兜底 / 正常新消息）。 */
     private String resumeRouter(ChatFlowState state) {
         if (state.getMode() == ChatFlowState.Mode.REVISE) {
             return ChatFlowState.INTENT_REVISE;
         }
         String resumeType = state.getResumeType();
-        if (ChatFlowState.RESUME_ANSWER.equals(resumeType) || ChatFlowState.RESUME_OPTION.equals(resumeType)
-                || ChatFlowState.RESUME_TIMEOUT.equals(resumeType)) {
+        if (ChatFlowState.RESUME_OPTION.equals(resumeType) || ChatFlowState.RESUME_TIMEOUT.equals(resumeType)) {
             return resumeType;
         }
         return ChatFlowState.RESUME_NEW;
     }
 
-    /** 意图路由：咨询直接回复；微调走改写链；新创作进入 Gate 充分性判断。 */
-    private String routeAfterIntent(ChatFlowState state) {
-        String intent = state.getIntent();
-        if (ChatFlowState.INTENT_CONSULT.equals(intent)) {
+    /** Gate 结果路由：咨询/微调意图不进创作循环；新创作按充分性分流（挂起 or 收集知识）。 */
+    private String routeAfterGate(ChatFlowState state) {
+        if (ChatFlowState.INTENT_CONSULT.equals(state.getIntent())) {
             return ChatFlowState.INTENT_CONSULT;
         }
-        if (ChatFlowState.INTENT_REVISE.equals(intent)) {
+        if (ChatFlowState.INTENT_REVISE.equals(state.getIntent())) {
             return ChatFlowState.INTENT_REVISE;
         }
-        return ChatFlowState.INTENT_NEW_CREATE;
+        return state.isSufficient() ? "enough" : "short";
     }
 
     private @NonNull Map<String, String> branches(@NonNull String... keyValues) {

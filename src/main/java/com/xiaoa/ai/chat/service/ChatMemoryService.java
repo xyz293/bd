@@ -21,6 +21,7 @@ import java.util.Set;
  * <ul>
  *   <li>{@code chat:mem:{sessionId}}           Hash：slots（槽位快照 JSON）/ round（问卷轮次）/ pendingType</li>
  *   <li>{@code chat:pending:option:{sessionId}} String：选项卡挂起载荷 JSON（供超时兜底扫描）</li>
+ *   <li>{@code chat:task:{sessionId}}           String：会话当前任务 id（任务 id 与会话 id 分离，恢复入口按它定位任务态）</li>
  *   <li>{@code chat:seq:{sessionId}}            String：INCR 会话序号（预扣幂等键）</li>
  *   <li>{@code chat:metric:{tenantId}:{event}:{yyyyMMdd}} String：INCR 埋点计数（TTL 7d，数据飞轮原料）</li>
  * </ul>
@@ -37,6 +38,7 @@ public class ChatMemoryService {
 
     private static final String KEY_MEM = "chat:mem:";
     private static final String KEY_PENDING_OPTION = "chat:pending:option:";
+    private static final String KEY_TASK = "chat:task:";
     private static final String KEY_SEQ = "chat:seq:";
     private static final String KEY_METRIC = "chat:metric:";
 
@@ -159,6 +161,33 @@ public class ChatMemoryService {
         return expired;
     }
 
+    // ==================== 任务 id 映射（任务 id 与会话 id 分离） ====================
+
+    /**
+     * 登记/覆盖会话当前任务 id：新任务开始时绑定；选项卡挂起后，
+     * 恢复入口（/chat/option、超时兑底）按它定位该任务的 checkpoint 与隔离记忆。
+     */
+    public void bindTask(Long sessionId, String taskId) {
+        if (sessionId == null || taskId == null || taskId.trim().isEmpty()) {
+            return;
+        }
+        redisTemplate.opsForValue().set(keyTask(sessionId), taskId, MEMORY_TTL);
+    }
+
+    /** 读会话当前任务 id，miss 返回 null（调用方回退重建式装配）。 */
+    public String currentTask(Long sessionId) {
+        String taskId = (String) redisTemplate.opsForValue().get(keyTask(sessionId));
+        if (taskId != null) {
+            redisTemplate.expire(keyTask(sessionId), MEMORY_TTL);
+        }
+        return taskId;
+    }
+
+    /** 删除会话当前任务 id 映射（任务完成/释放任务态时调用）。 */
+    public void releaseTask(Long sessionId) {
+        redisTemplate.delete(keyTask(sessionId));
+    }
+
     // ==================== 序号 / 埋点 ====================
 
     /** 会话级自增序号（预扣幂等键 chat:{sessionId}:hold:{seq}）。 */
@@ -194,6 +223,10 @@ public class ChatMemoryService {
         return KEY_PENDING_OPTION + sessionId;
     }
 
+    private String keyTask(Long sessionId) {
+        return KEY_TASK + sessionId;
+    }
+
     private String keySeq(Long sessionId) {
         return KEY_SEQ + sessionId;
     }
@@ -203,6 +236,7 @@ public class ChatMemoryService {
         Map<String, String> samples = new HashMap<String, String>();
         samples.put("mem", KEY_MEM + sessionId);
         samples.put("pending", KEY_PENDING_OPTION + sessionId);
+        samples.put("task", KEY_TASK + sessionId);
         samples.put("seq", KEY_SEQ + sessionId);
         return samples;
     }

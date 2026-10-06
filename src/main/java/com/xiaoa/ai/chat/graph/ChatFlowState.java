@@ -17,11 +17,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * 对话流状态（方案 §5 ChatState 定义的运行时载体，LangGraph State 语义）：
  * 槽位/缺口/AI 代选/问卷轮次/挂起载荷/事实核验报告/生成结果 全程随图传递。
  *
- * <p>恢复类型（三类挂起点的 resume 语义）：</p>
+ * <p>恢复类型（挂起点的 resume 语义）：</p>
  * <ul>
- *   <li>RESUME_NEW：正常新消息，从 ① fetch_context 开始</li>
- *   <li>RESUME_ANSWER：问卷作答恢复（挂起点1）→ 合并答案 → 回 ② 重算缺口</li>
- *   <li>RESUME_OPTION：选项卡选择恢复（挂起点）→ 应用用户选择 → 回 Gate 复判（循环）</li>
+ *   <li>RESUME_NEW：正常新消息，从 Gate（意图+充分性）开始</li>
+ *   <li>RESUME_OPTION：选项卡选择恢复 → 应用用户选择 → 回 Gate 复判（循环）</li>
  *   <li>RESUME_TIMEOUT：选项卡超时兜底 → AI 代选补齐 → 技能取数 → 直接生成</li>
  * </ul>
  */
@@ -29,9 +28,7 @@ public class ChatFlowState {
 
     /** 正常新消息入口 */
     public static final String RESUME_NEW = "NEW";
-    /** 问卷作答恢复（挂起点1） */
-    public static final String RESUME_ANSWER = "ANSWER";
-    /** 选项卡选择恢复（挂起点2） */
+    /** 选项卡选择恢复（挂起点） */
     public static final String RESUME_OPTION = "OPTION";
     /** 选项卡超时兜底恢复（默认 D 直接生成） */
     public static final String RESUME_TIMEOUT = "TIMEOUT";
@@ -62,8 +59,9 @@ public class ChatFlowState {
 
     // ==================== 基础上下文 ====================
     private Mode mode;
-    /** 图线程标识（LangGraph thread_id 语义）：短期记忆/恢复按它定位，等于会话 ID 字符串 */
-    private String threadId;
+/** 图线程标识（LangGraph thread_id 语义）：<b>任务 id，独立于会话 ID</b>，每次编排生成一次；
+ * 短期记忆（Agent 隔离记忆 / checkpoint）按它定位，任务走到最后节点即释放。 */
+private String threadId;
     private AuthPrincipal principal;
     private ChatSession session;
     private ChatReviseRequest revise;
@@ -145,11 +143,16 @@ public class ChatFlowState {
 
     // ==================== 工厂 ====================
 
-    /** 正常新消息：从 ① fetch_context 开始 */
+    /** 生成新任务 id：与会话 id 分离，同一会话多次创作各自独立（记忆互不残留）。 */
+    private static String newTaskId(Long sessionId) {
+        return "task-" + sessionId + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    /** 正常新消息：从 ① fetch_context 开始（生成新任务 id） */
     public static ChatFlowState forChat(AuthPrincipal principal, ChatSession session, String userInput) {
         ChatFlowState state = new ChatFlowState();
         state.mode = Mode.CHAT;
-        state.threadId = String.valueOf(session.getId());
+        state.threadId = newTaskId(session.getId());
         state.principal = principal;
         state.session = session;
         state.userInput = userInput;
@@ -157,18 +160,7 @@ public class ChatFlowState {
         return state;
     }
 
-    /** 问卷作答恢复：合并答案后回 ② 重新计算缺口 */
-    public static ChatFlowState forAnswer(AuthPrincipal principal, ChatSession session,
-                                          Map<String, String> answers) {
-        ChatFlowState state = forChat(principal, session, null);
-        state.resumeType = RESUME_ANSWER;
-        if (answers != null) {
-            state.answers.putAll(answers);
-        }
-        return state;
-    }
-
-    /** 选项卡选择恢复：应用增益槽位后直进 ⑥ */
+    /** 选项卡选择恢复：应用用户选择后回 Gate 复判 */
     public static ChatFlowState forOption(AuthPrincipal principal, ChatSession session, String optionKey) {
         ChatFlowState state = forChat(principal, session, null);
         state.resumeType = RESUME_OPTION;
@@ -183,12 +175,12 @@ public class ChatFlowState {
         return state;
     }
 
-    /** 微调：从指定版本按指令改写（老链路保持） */
+    /** 微调：从指定版本按指令改写（老链路保持；生成新任务 id） */
     public static ChatFlowState forRevise(AuthPrincipal principal, ChatSession session,
                                            ChatReviseRequest revise) {
         ChatFlowState state = new ChatFlowState();
         state.mode = Mode.REVISE;
-        state.threadId = String.valueOf(session.getId());
+        state.threadId = newTaskId(session.getId());
         state.principal = principal;
         state.session = session;
         state.revise = revise;

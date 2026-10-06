@@ -2,7 +2,6 @@ package com.xiaoa.ai.chat.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.xiaoa.ai.chat.dto.ChatAnswerRequest;
 import com.xiaoa.ai.chat.dto.ChatOptionRequest;
 import com.xiaoa.ai.chat.dto.ChatSendRequest;
 import com.xiaoa.ai.graph.NodeListener;
@@ -19,9 +18,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -37,17 +34,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <pre>
  * 客户端 → 服务端：
  *   {"type":"chat.send","sessionId":1,"text":"帮我写一条朋友圈文案"}     用户消息入口
- *   {"type":"chat.answer","sessionId":1,"answers":[{"slotKey":"product","value":"对戒"}]}
- *                                                                       问卷作答提交（挂起点1 恢复）
- *   {"type":"chat.option","sessionId":1,"key":"A"}                       选项卡选择（挂起点2 恢复）
+ *   {"type":"chat.option","sessionId":1,"key":"A"}                       选项卡选择（挂起恢复）
  *   {"type":"ping"}                                                      应用层心跳
  *
  * 服务端 → 客户端：
  *   {"type":"connected"} / {"type":"pong"}
- *   {"type":"stage","sessionId":1,"node":"understandIntent","label":"…"}  节点阶段进度
+ *   {"type":"stage","sessionId":1,"node":"gateAssess","label":"…"}       节点阶段进度
  *   {"type":"message","sessionId":1,"reply":{...ChatReplyVO...}}          节点推进结果（事务提交后发送）
- *        reply.action = QUESTIONNAIRE / OPTION_CARD 时前端渲染挂起 UI 等待用户操作
- *        reply.action = PENDING_MEDIA 时前端拿 workId 轮询作品状态
+ *        reply.action = OPTION_CARD 时前端渲染挂起 UI 等待用户操作
  *   {"type":"done","sessionId":1} / {"type":"error","sessionId":1,"code":4001,"message":"…"}
  * </pre>
  *
@@ -63,8 +57,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private static final String ATTR_CHANNEL = "channel";
     /** 客户端帧类型：发消息 */
     private static final String TYPE_CHAT_SEND = "chat.send";
-    /** 客户端帧类型：问卷作答 */
-    private static final String TYPE_CHAT_ANSWER = "chat.answer";
     /** 客户端帧类型：选项卡选择 */
     private static final String TYPE_CHAT_OPTION = "chat.option";
     /** 客户端帧类型：心跳 */
@@ -111,7 +103,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             channel.send("pong", null);
             return;
         }
-        if (!TYPE_CHAT_SEND.equals(type) && !TYPE_CHAT_ANSWER.equals(type) && !TYPE_CHAT_OPTION.equals(type)) {
+        if (!TYPE_CHAT_SEND.equals(type) && !TYPE_CHAT_OPTION.equals(type)) {
             channel.send("error", error(sessionId(frame), ErrorCode.INVALID_PARAMETER.getCode(), "未知消息类型: " + type));
             return;
         }
@@ -165,7 +157,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                         (NodeListener<ChatFlowState>) (nodeName, nodeState) ->
                                 channel.send("stage", stageEvent(sessionId, nodeName)));
             } else {
-                // 问卷作答/选项卡恢复：直接跑到挂起点下游
+                // 选项卡恢复：直接跑到挂起点下游
                 reply = invoke(principal, sessionId, frame, type);
             }
             // 事务已提交，推送节点推进结果（问卷/选项卡/生成结果）
@@ -184,23 +176,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     /** 按帧类型构造请求并调用对应编排入口。 */
     private com.xiaoa.ai.chat.dto.ChatReplyVO invoke(AuthPrincipal principal, long sessionId,
                                                      JsonNode frame, String type) {
-        if (TYPE_CHAT_ANSWER.equals(type)) {
-            ChatAnswerRequest request = new ChatAnswerRequest();
-            List<ChatAnswerRequest.AnswerItem> answers = new ArrayList<>();
-            JsonNode answerNodes = frame.path("answers");
-            if (answerNodes.isArray()) {
-                answerNodes.forEach(item -> {
-                    ChatAnswerRequest.AnswerItem answer = new ChatAnswerRequest.AnswerItem();
-                    answer.setSlotKey(item.path("slotKey").asText(""));
-                    answer.setValue(item.path("value").asText(""));
-                    if (!answer.getSlotKey().isEmpty() && !answer.getValue().isEmpty()) {
-                        answers.add(answer);
-                    }
-                });
-            }
-            request.setAnswers(answers);
-            return flowService.answer(principal, sessionId, request);
-        }
         if (TYPE_CHAT_OPTION.equals(type)) {
             ChatOptionRequest request = new ChatOptionRequest();
             request.setKey(frame.path("key").asText(""));
@@ -248,35 +223,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private static Map<String, String> buildNodeLabels() {
         Map<String, String> labels = new LinkedHashMap<String, String>();
-        // ① 获取数据
-        labels.put("fetchContext", "正在读取创作上下文…");
-        // ② 理解意图
-        labels.put("understandIntent", "正在理解你的需求…");
-        // ③ Gate 充分性判断 + 技能取数
-        labels.put("gateAssess", "正在判断信息是否足够…");
+        // ① Gate：意图识别 + 槽位抽取 + 充分性判断
+        labels.put("gateAssess", "正在理解需求并判断信息是否足够…");
+        // ② 收集知识（ReAct）
         labels.put("skillInvoke", "正在查询创作资料…");
-        labels.put("mergeAnswers", "正在合并你的回答…");
-        // ④ 核验+扣额度
-        labels.put("verifyAndCharge", "正在核验商品信息与额度…");
-        labels.put("respondQuota", "正在整理额度提示…");
-        // ⑤ 选项卡（信息不足挂起，用户选择后回 Gate 复判）
+        // ③ 选项卡（信息不足挂起，用户选择后回 Gate 复判）
         labels.put("presentOptionCard", "正在为你准备选项…");
         labels.put("applyOption", "正在应用你的选择…");
-        // ⑥ 生成
+        // ④ 生成（含额度预扣与合规过滤）
         labels.put("generateContent", "正在生成内容…");
-        labels.put("mediaSubmit", "正在提交图/视频任务…");
-        // ⑦ 审查+回复
-        labels.put("reviewAndRespond", "正在进行合规检查…");
-        labels.put("billingConfirm", "正在记录本次创作…");
-        labels.put("respondConsult", "正在回复…");
-        // 微调链路
-        labels.put("reviseValidate", "正在定位要微调的版本…");
-        labels.put("reviseCallLlm", "正在按你的要求改写…");
-        labels.put("reviseCompliance", "正在进行合规检查…");
-        labels.put("reviseBilling", "正在记录本次微调…");
-        // 汇合
-        labels.put("responseComposer", "正在组织回复…");
-        labels.put("persist", "正在保存会话…");
+        // ⑤ 整合（三段式包装 + 落库）
+        labels.put("compose", "正在组织回复…");
         return labels;
     }
 
